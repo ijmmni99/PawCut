@@ -3,6 +3,8 @@ import { detectCapabilities, type Capabilities, type CodecProbe } from '../engin
 import { readOpfsFile, startExport, type ExportHandle } from '../engine/export/exportClient';
 import { ENGINE_TEST_PRESET, TIKTOK_1080P30, type SourceInfo } from '../engine/export/protocol';
 import { holdWakeLock } from '../engine/wakeLock';
+import { navigate } from './router';
+import { Icon } from './ui/Icon';
 
 type Phase =
   | { kind: 'idle' }
@@ -127,8 +129,11 @@ export function SpikeScreen() {
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-[calc(env(safe-area-inset-top)+12px)]">
       <header className="flex items-center justify-between">
-        <h1 className="text-xl font-extrabold tracking-tight">
-          🐾 PawCut <span className="text-sm font-medium text-zinc-400">Phase 0 spike</span>
+        <h1 className="flex items-center text-xl font-extrabold tracking-tight">
+          <button type="button" aria-label="Back" onClick={() => navigate({ name: 'projects' })} className="-ml-2 flex size-11 items-center justify-center">
+            <Icon name="back" />
+          </button>
+          Diagnostics
         </h1>
         {caps && (
           <span className={`rounded-full px-2 py-1 text-xs ${caps.standalone ? 'bg-emerald-900 text-emerald-300' : 'bg-amber-900 text-amber-300'}`}>
