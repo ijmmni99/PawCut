@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bg: #0b0b0f;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: #f4f4f5;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body {
+  /* No pull-to-refresh, no rubber-band, no double-tap zoom, no long-press callouts. */
+  overscroll-behavior: none;
+  overflow: hidden;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Portrait lock: manifest orientation only applies on Android; iOS needs a visual guard. */
+.landscape-guard {
+  display: none;
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  .landscape-guard {
+    display: flex;
+  }
+}
