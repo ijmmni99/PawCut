@@ -18,8 +18,11 @@ Notes
   simple content. Acceptable; revisit with `bitrateMode: 'constant'` if TikTok re-compression looks soft.
 - Output was streamed to OPFS, no memory problems on a 60 MB source.
 
-## Still open
-- [ ] Exported MP4 plays in Photos (via Share → Save Video)
-- [ ] Uploads to TikTok
+## Verdict: ✅ PASS (2026-10-17)
+HDR / 4K60 checks carried into Phase 1 (import + proxy work touches the same path).
+
+## Checklist
+- [x] Exported MP4 plays in Photos (via Share → Save Video)
+- [x] Uploads to TikTok
 - [ ] HEVC 10-bit HDR source (default iPhone camera) — check speed and whether colours look washed out
 - [ ] 4K60 source

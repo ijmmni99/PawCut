@@ -30,9 +30,9 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - **Rotation baked into pixels** (`allowTransformationMetadata: false`) so preview, export and every player agree.
 - Export preset lives in `src/engine/export/protocol.ts` (`TIKTOK_1080P30`).
 
-## Phase 0 findings (see docs/phase0-report.md)
+## Phase 0 findings — PASSED (see docs/phase0-report.md)
 - Real iPhone PWA: native H.264 + AAC WebCodecs encode, OPFS sync handles, Web Share files, wake lock, WebGPU all work.
-- 51s 1080×1920 export took 28s (0.55× RT). Safari undershoots requested H.264 bitrate (~6 of 10 Mbps).
+- Export plays in Photos and uploads to TikTok. 51s 1080×1920 export took 28s (0.55× RT). Safari undershoots requested H.264 bitrate (~6 of 10 Mbps).
 
 ## Known iOS quirks / risks
 - Worker + WebCodecs are suspended when the PWA is backgrounded. Wake lock prevents dimming, but switching apps
