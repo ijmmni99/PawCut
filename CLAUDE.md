@@ -7,7 +7,10 @@ Primary target: iPhone Safari installed to Home Screen. No desktop layout.
 - `npm run dev` — Vite dev server (sends COOP/COEP headers)
 - `npm run build` — typecheck + production build (`dist/`)
 - `npm run preview` — serve `dist/` with COOP/COEP
-- `npx playwright test` — UI smoke tests (iPhone 13 emulation on Chromium). Phase 0 export test needs `PAWCUT_SPIKE_VIDEO=/path/to/video`.
+- `npm test` — Vitest unit tests (timeline model, audio resampling)
+- `./scripts/make-fixtures.sh` then `npx playwright test` — e2e on Chromium (iPhone 13 emulation). Chromium has no
+  H.264/AAC, so tests open the app with `?codec=vp9` (VP9/Opus everywhere, same pipeline; also exposes
+  `window.__pawcut` stores for assertions). Phase 0 spike test needs `PAWCUT_SPIKE_VIDEO=/path/to/video`.
 - `node scripts/render-icons.mjs` — regenerate PNG icons from `public/icons/icon.svg`
 
 ## Stack
@@ -16,12 +19,24 @@ Vite 8, React 18, TypeScript (strict, `noUncheckedIndexedAccess`), Tailwind 4 (v
 Hosting: Cloudflare Pages; headers live in `public/_headers`.
 
 ## Architecture (current)
-- `src/engine/capabilities.ts` — feature detection (WebCodecs `isConfigSupported`, OPFS, WebGPU, share, wake lock). Never throws.
-- `src/engine/export/export.worker.ts` — decode → resize/rotate → H.264 + AAC encode → MP4, entirely in a worker.
-  Output streams into OPFS via `createSyncAccessHandle` (falls back to in-memory `BufferTarget`).
-- `src/engine/export/exportClient.ts` — main-thread wrapper; reads the finished file back from OPFS.
-- `src/engine/wakeLock.ts` — screen wake lock, re-acquired on `visibilitychange`.
-- `src/app/SpikeScreen.tsx` — Phase 0 spike UI (import → export → share + copyable device report).
+- **Model** `src/editor/timeline/model.ts` — pure JSON `Project { main: Clip[] }` + pure ops (split, trim, ripple delete,
+  duplicate, move, speed). Main track is magnetic (no gaps). Clip = asset + in/out source seconds + constant speed.
+- **State** `src/editor/store.ts` — zustand: `useEditor` (project, unlimited undo/redo, selection, gesture batching:
+  `beginGesture`/`endGesture` make a whole drag one undo step), `useAssets`, `usePlayback` (playhead, playing).
+- **Persistence** `src/library/` — Dexie (`projects`, `assets`, `history`, `settings`). Autosave 300ms debounce + flush on
+  hide/pagehide. Last open project id is stored so a killed PWA relaunches into it. Undo history persisted (last 100).
+- **Media** OPFS layout `media/<assetId>/{original.*, proxy.mp4, poster.jpg, thumbs.jpg}`, `exports/latest.mp4`.
+- **Import** `src/engine/media/import.worker.ts` — copy original into OPFS → probe → ONE decode pass producing the
+  540p proxy (H.264 2.5 Mbps, 0.5s GOP for fast seeks) plus poster and a thumbnail sprite (≤120 tiles). Serial queue.
+  Interrupted imports resume from the OPFS original on next launch.
+- **Preview** `src/editor/preview/` — two `<video>` elements on proxies (HW decode), the spare one parked on the next
+  clip's in-point so cuts swap instantly; frames drawn by a WebGL2 compositor on one canvas. Scrub seeks coalesce.
+- **Timeline** `src/editor/timeline/TimelineView.tsx` — single canvas, fixed centre playhead. Pan+inertia, pinch zoom,
+  tap select, trim handles (snap to playhead), long-press reorder.
+- **Export** `src/engine/export/render.worker.ts` — renders the project from ORIGINALS: 30fps output frames map to
+  source times via `CanvasSink.canvasesAtTimestamps`; audio decoded per 5s window and speed-resampled to 48k stereo
+  (`src/engine/audio/resample.ts`), 5ms fades at cuts. Streams to OPFS.
+- Phase 0 spike lives on as Diagnostics (`#/diagnostics`, gear icon on projects screen).
 
 ## Decisions
 - **AAC fallback = `@mediabunny/aac-encoder`** (FFmpeg AAC in WASM, ~260 KB gz), lazy-loaded in the worker only when
@@ -29,12 +44,20 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - **MP4 `fastStart: false`** — moov at end, no second in-memory copy. Photos/TikTok accept it.
 - **Rotation baked into pixels** (`allowTransformationMetadata: false`) so preview, export and every player agree.
 - Export preset lives in `src/engine/export/protocol.ts` (`TIKTOK_1080P30`).
+- **Speed shifts pitch** (export resampler + `preservesPitch=false` in preview). Pitch-preserving stretch is later work.
+- Preview uses `<video>` elements, not a WebCodecs player: iOS HW decode, built-in A/V sync, tiny main-thread cost.
+  Revisit only if Phase 5 (3 layers + transition) can't hold 30fps.
+- Horizontal clips are letterboxed (`contain`) for now; blurred-background fill comes with the compositor work.
+- Removed clips' media stays in OPFS (undo can restore them); assets are garbage-collected when a project is deleted.
+- Never use `hardwareAcceleration: 'prefer-hardware'` — it's a hard requirement and fails without a HW encoder.
 
 ## Phase 0 findings — PASSED (see docs/phase0-report.md)
 - Real iPhone PWA: native H.264 + AAC WebCodecs encode, OPFS sync handles, Web Share files, wake lock, WebGPU all work.
 - Export plays in Photos and uploads to TikTok. 51s 1080×1920 export took 28s (0.55× RT). Safari undershoots requested H.264 bitrate (~6 of 10 Mbps).
 
 ## Known iOS quirks / risks
+- `<video>.play()` with sound needs a user gesture per element: the player "unlocks" both elements on the first Play
+  tap; if a later swap is still refused it continues muted rather than stopping.
 - Worker + WebCodecs are suspended when the PWA is backgrounded. Wake lock prevents dimming, but switching apps
   pauses export. Must warn the user to keep PawCut open.
 - iPhone footage is usually HEVC, often 10-bit HDR (HLG / Dolby Vision). Re-encoding to 8-bit H.264 SDR without
