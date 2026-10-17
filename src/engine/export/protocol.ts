@@ -62,3 +62,22 @@ export type ExportEvent =
  * H.264/AAC; enabled with `?codec=vp9`. Never a user-facing preset.
  */
 export const ENGINE_TEST_PRESET: ExportPreset = { ...TIKTOK_1080P30, videoCodec: 'vp9', audioCodec: 'opus' };
+
+// ---- Timeline export (Phase 1+) ----
+
+export const EXPORT_PATH = 'exports/latest.mp4';
+
+export type RenderRequest =
+  | {
+      type: 'start';
+      project: import('../../editor/timeline/model').Project;
+      assets: Record<string, import('../../editor/timeline/model').Asset>;
+      preset: ExportPreset;
+    }
+  | { type: 'cancel' };
+
+export type RenderEvent =
+  | { type: 'progress'; progress: number; elapsedMs: number }
+  | { type: 'done'; opfsPath: string; sizeBytes: number; durationSec: number; elapsedMs: number }
+  | { type: 'error'; message: string }
+  | { type: 'canceled' };
