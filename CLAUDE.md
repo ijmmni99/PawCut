@@ -13,6 +13,10 @@ Primary target: iPhone Safari installed to Home Screen. No desktop layout.
   `window.__pawcut` stores for assertions). Phase 0 spike test needs `PAWCUT_SPIKE_VIDEO=/path/to/video`.
 - `node scripts/render-icons.mjs` — regenerate PNG icons from `public/icons/icon.svg`
 
+## Workflow
+- Owner's standing instruction: push finished work straight to `main` (Cloudflare Workers Builds deploys `main`).
+  Keep small, validated commits; run `npm run build` and `npm test` before every push.
+
 ## Stack
 Vite 8, React 18, TypeScript (strict, `noUncheckedIndexedAccess`), Tailwind 4 (via `@tailwindcss/vite`),
 `vite-plugin-pwa` (generateSW, prompt-to-update), Mediabunny for demux/mux + WebCodecs orchestration.
