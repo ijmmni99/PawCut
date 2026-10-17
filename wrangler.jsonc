@@ -1,0 +1,10 @@
+// Cloudflare Workers static-assets deploy (Workers Builds runs `npm run build` then `npx wrangler deploy`).
+// public/_headers is copied into dist/ and applied by the assets server (COOP/COEP, caching).
+{
+  "name": "pawcut",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
