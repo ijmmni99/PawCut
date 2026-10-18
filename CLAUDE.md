@@ -11,6 +11,7 @@ Primary target: iPhone Safari installed to Home Screen. No desktop layout.
 - `./scripts/make-fixtures.sh` then `npx playwright test` — e2e on Chromium (iPhone 13 emulation). Chromium has no
   H.264/AAC, so tests open the app with `?codec=vp9` (VP9/Opus everywhere, same pipeline; also exposes
   `window.__pawcut` stores for assertions). Phase 0 spike test needs `PAWCUT_SPIKE_VIDEO=/path/to/video`.
+  `PAWCUT_SKIP_PERF=1` skips the playback-smoothness assertions when the sandbox is CPU-starved.
 - `node scripts/render-icons.mjs` — regenerate PNG icons from `public/icons/icon.svg`
 
 ## Workflow
@@ -30,9 +31,13 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - **Persistence** `src/library/` — Dexie (`projects`, `assets`, `history`, `settings`). Autosave 300ms debounce + flush on
   hide/pagehide. Last open project id is stored so a killed PWA relaunches into it. Undo history persisted (last 100).
 - **Media** OPFS layout `media/<assetId>/{original.*, proxy.mp4, poster.jpg, thumbs.jpg}`, `exports/latest.mp4`.
-- **Import** `src/engine/media/import.worker.ts` — copy original into OPFS → probe → ONE decode pass producing the
-  540p proxy (H.264 2.5 Mbps, 0.5s GOP for fast seeks) plus poster and a thumbnail sprite (≤120 tiles). Serial queue.
-  Interrupted imports resume from the OPFS original on next launch.
+- **Import** `src/engine/media/import.worker.ts` — two serial queues: (1) copy original into OPFS + probe for every
+  file immediately (clip lands on the timeline at once), (2) build proxies one at a time: decode every frame,
+  keep ≤30fps, rotate + downscale with `AdaptiveScaler` (`scaler.ts`: benchmarks WebGL / createImageBitmap / 2D on
+  the first 12 frames incl. the canvas→VideoSample capture, keeps the fastest), encode 540p H.264 2.5 Mbps,
+  0.5s GOP, `latencyMode: 'realtime'`, source timestamps kept. Audio goes in via a composable Conversion into the
+  same Output. Poster + thumbnail sprite come from the scaled canvas. Per-stage timings (`asset.prepStats`) show in
+  Diagnostics → Recent imports. Interrupted imports resume from the OPFS original on next launch.
 - **Preview** `src/editor/preview/` — `preview.worker.ts` decodes proxies with WebCodecs (Mediabunny `VideoSampleSink`)
   and streams transferable `VideoFrame`s + PCM chunks ahead of the playhead (16-frame credit window, audio ≤4s ahead).
   While a clip plays, the next clip's decoder is opened and pre-decoded, so cuts are seamless. Main thread
@@ -69,6 +74,8 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - Removed clips' media stays in OPFS (undo can restore them); assets are garbage-collected when a project is deleted.
 - Detector assets are self-hosted: Google's model bucket sends no CORS headers, which COEP `require-corp` blocks.
 - Beat sync and punch-zoom for Hype wait for Music (Phase 3) and keyframes (Phase 5).
+- Proxy scaling is benchmarked per device rather than hard-coded: on GPU-less Chromium WebGL readback is the slowest
+  option, on iPhone the 2D canvas path (old Mediabunny resize) made "Preparing" very slow on 4K footage.
 - e2e runs with `workers: 1`: media tests in parallel starve each other and skew the smoothness checks.
 - Never use `hardwareAcceleration: 'prefer-hardware'` — it's a hard requirement and fails without a HW encoder.
 
