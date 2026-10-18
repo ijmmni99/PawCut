@@ -1,19 +1,33 @@
-// Draws video frames onto the single preview canvas. WebGL2 today (one textured quad, letterboxed to 9:16);
+// Draws decoded VideoFrames onto the single preview canvas. WebGL2 today (one textured quad, letterboxed to 9:16);
 // filters, layers and transitions will become extra shader passes here in later phases.
 // Falls back to 2D canvas when WebGL2 is unavailable.
 
+/** A decoded frame plus the clockwise rotation (0/90/180/270) needed to display it upright. */
+export type FrameSource = { frame: VideoFrame; rotation: number };
+
 export type Compositor = {
   resize(width: number, height: number): void;
-  draw(source: HTMLVideoElement | null): void;
+  draw(source: FrameSource | null): void;
   destroy(): void;
 };
+
+function displaySize({ frame, rotation }: FrameSource): { w: number; h: number } {
+  const w = frame.displayWidth;
+  const h = frame.displayHeight;
+  return rotation % 180 === 0 ? { w, h } : { w: h, h: w };
+}
 
 const VS = `#version 300 es
 in vec2 a_pos;
 uniform vec4 u_rect; // x, y, w, h in clip space
+uniform int u_rot;   // clockwise quarter turns applied to the source
 out vec2 v_uv;
 void main() {
-  v_uv = vec2(a_pos.x, 1.0 - a_pos.y);
+  vec2 d = vec2(a_pos.x, 1.0 - a_pos.y); // display uv, y down
+  if (u_rot == 1) v_uv = vec2(d.y, 1.0 - d.x);
+  else if (u_rot == 2) v_uv = vec2(1.0 - d.x, 1.0 - d.y);
+  else if (u_rot == 3) v_uv = vec2(1.0 - d.y, d.x);
+  else v_uv = d;
   gl_Position = vec4(u_rect.xy + a_pos * u_rect.zw, 0.0, 1.0);
 }`;
 
@@ -58,6 +72,7 @@ function createGL(canvas: HTMLCanvasElement): Compositor | null {
   gl.enableVertexAttribArray(loc);
   gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   const uRect = gl.getUniformLocation(program, 'u_rect');
+  const uRot = gl.getUniformLocation(program, 'u_rot');
 
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -72,12 +87,14 @@ function createGL(canvas: HTMLCanvasElement): Compositor | null {
       canvas.height = height;
       gl.viewport(0, 0, width, height);
     },
-    draw(video) {
+    draw(source) {
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
-      if (!video || video.readyState < 2 || video.videoWidth === 0) return;
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
-      const r = containRect(video.videoWidth, video.videoHeight, canvas.width, canvas.height);
+      if (!source) return;
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source.frame);
+      gl.uniform1i(uRot, Math.round(source.rotation / 90) % 4);
+      const size = displaySize(source);
+      const r = containRect(size.w, size.h, canvas.width, canvas.height);
       // Pixel rect -> clip space (y up).
       gl.uniform4f(
         uRect,
@@ -103,13 +120,19 @@ function create2D(canvas: HTMLCanvasElement): Compositor {
       canvas.width = width;
       canvas.height = height;
     },
-    draw(video) {
+    draw(source) {
       if (!ctx) return;
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      if (!video || video.readyState < 2 || video.videoWidth === 0) return;
-      const r = containRect(video.videoWidth, video.videoHeight, canvas.width, canvas.height);
-      ctx.drawImage(video, r.x, r.y, r.w, r.h);
+      if (!source) return;
+      const size = displaySize(source);
+      const r = containRect(size.w, size.h, canvas.width, canvas.height);
+      ctx.save();
+      ctx.translate(r.x + r.w / 2, r.y + r.h / 2);
+      ctx.rotate((source.rotation * Math.PI) / 180);
+      const [dw, dh] = source.rotation % 180 === 0 ? [r.w, r.h] : [r.h, r.w];
+      ctx.drawImage(source.frame, -dw / 2, -dh / 2, dw, dh);
+      ctx.restore();
     },
     destroy() {},
   };

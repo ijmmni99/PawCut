@@ -103,8 +103,14 @@ test('import → edit → export → reload', async ({ page }) => {
   await page.getByRole('button', { name: 'Play' }).click();
   await page.waitForTimeout(3500);
   s = await snap(page);
-  console.log(`time after 3.5s of playback: ${s.time.toFixed(2)} playing=${s.playing}`);
+  const stats = await page.evaluate(
+    () => (window as unknown as { __pawcut: { previewStats: { shown: number; dropped: number; maxGapMs: number } } }).__pawcut.previewStats,
+  );
+  console.log(`after 3.5s: time ${s.time.toFixed(2)} playing=${s.playing} stats ${JSON.stringify(stats)}`);
   expect(s.time).toBeGreaterThan(2.6); // crossed at least one cut
+  // Smooth through the cut: ~30fps shown, no long freeze.
+  expect(stats.shown).toBeGreaterThan(80);
+  expect(stats.maxGapMs).toBeLessThan(200);
   await page.getByRole('button', { name: 'Pause' }).click();
 
   // Export.

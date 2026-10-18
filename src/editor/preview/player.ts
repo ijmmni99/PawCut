@@ -1,288 +1,327 @@
-// Preview playback over the main track using two <video> elements fed by the 540p proxies:
-// one plays the current clip while the other is preloaded and parked on the next clip's in-point, so cuts swap
-// instantly. iOS decodes <video> in hardware, which keeps the main thread free for the timeline.
-// Scrub seeks are coalesced: only the latest requested time is sought once the previous seek lands.
+// Preview playback. A worker decodes the proxies with WebCodecs and streams frames + PCM ahead of the playhead;
+// this side schedules the audio sample-accurately on an AudioContext and uses that audio clock to pick which
+// frame to show each animation frame. Because frames after a cut are decoded before the cut is reached, cuts are
+// seamless (no element switching or play() start-up latency, which is what made <video>-based cuts stutter on iOS).
+// While paused, scrubbing requests single stills; the worker only decodes the latest request.
 import { useAssets, useEditor, usePlayback } from '../store';
-import { type Asset, type Project, clipDuration, clipStarts, locate } from '../timeline/model';
-import { readFile } from '../../engine/storage/opfs';
-import { type Compositor, createCompositor } from './compositor';
+import { locate, projectDuration } from '../timeline/model';
+import { type Compositor, type FrameSource, createCompositor } from './compositor';
+import type { PreviewEvent, PreviewRequest } from './protocol';
 
-type Slot = {
-  el: HTMLVideoElement;
-  /** What the element is (or will be) showing: asset + source second. */
-  assetId: string | null;
-  url: string | null;
-  target: number | null;
-  seeking: boolean;
-};
+type QueuedFrame = FrameSource & { t: number };
+type AudioChunk = Extract<PreviewEvent, { type: 'audio' }>;
 
-type SourceUrl = { url: string; kind: 'proxy' | 'original' };
+/** Wait at most this long for the first audio chunk before starting the clock. */
+const AUDIO_GRACE_MS = 250;
+/** Frames buffered before the clock starts, so the decoder is ahead from the first frame. */
+const START_FRAMES = 6;
+/** ...unless the stream is shorter than that or the decoder is slow: start anyway after this long. */
+const START_MAX_WAIT_MS = 400;
+/** Start the clock slightly in the future so the first audio buffer is never late. */
+const START_LEAD_SEC = 0.05;
+const ACK_EVERY_FRAMES = 4;
+const ACK_EVERY_MS = 200;
 
-/** Cut tolerance: half a frame at 30fps. */
-const END_EPS = 1 / 60;
-const PRELOAD_SEC = 1.5;
+type State = 'paused' | 'starting' | 'playing';
 
-function makeVideo(): HTMLVideoElement {
-  const el = document.createElement('video');
-  el.playsInline = true;
-  el.preload = 'auto';
-  el.muted = false;
-  el.disableRemotePlayback = true;
-  // Match export: speed changes shift pitch.
-  el.preservesPitch = false;
-  return el;
-}
+/** Playback smoothness counters (read by e2e tests; reset on every play). */
+export const previewStats = { shown: 0, dropped: 0, maxGapMs: 0, maxGapAt: 0, lastShowAt: 0 };
+
+type AudioSessionNavigator = Navigator & { audioSession?: { type: string } };
 
 export class PreviewPlayer {
   private readonly compositor: Compositor;
-  private readonly slots: [Slot, Slot];
-  private active: 0 | 1 = 0;
-  private playingIndex = -1;
-  private raf = 0;
-  private unlocked = false;
-  private readonly urls = new Map<string, SourceUrl>();
-  private readonly pendingUrls = new Map<string, Promise<SourceUrl | null>>();
+  private readonly worker: Worker;
   private readonly unsubscribers: Array<() => void> = [];
-  private destroyed = false;
+  private shown: FrameSource | null = null;
+  private queue: QueuedFrame[] = [];
+  private pendingAudio: AudioChunk[] = [];
+  private readonly nodes = new Set<AudioBufferSourceNode>();
+  private ctx: AudioContext | null = null;
+  private master: GainNode | null = null;
+  private state: State = 'paused';
+  private gen = 0;
+  private stillId = 0;
+  private shownStillId = 0;
+  private from = 0;
+  private ctxStart = 0;
+  private playRequestedAt = 0;
+  private gotAudio = false;
+  private streamEnded = false;
+  private consumed = 0;
+  private lastAck = 0;
+  private raf = 0;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement) {
     this.compositor = createCompositor(canvas);
-    this.slots = [this.makeSlot(), this.makeSlot()];
+    this.worker = new Worker(new URL('./preview.worker.ts', import.meta.url), { type: 'module' });
+    this.worker.onmessage = (e: MessageEvent<PreviewEvent>) => this.onEvent(e.data);
+    this.sync();
 
-    // While paused, follow the playhead (scrubbing) and re-show the frame after edits.
     this.unsubscribers.push(
       usePlayback.subscribe((s, prev) => {
-        if (!s.playing && s.time !== prev.time) this.showTime(s.time);
+        if (this.state === 'paused' && s.time !== prev.time) this.showTime(s.time);
       }),
       useEditor.subscribe((s, prev) => {
-        if (s.project !== prev.project) {
-          if (usePlayback.getState().playing) this.pause();
-          this.clampTime();
-          this.showTime(usePlayback.getState().time);
-        }
+        if (s.project === prev.project) return;
+        this.sync();
+        if (this.state !== 'paused') this.pause();
+        this.clampTime();
+        this.showTime(usePlayback.getState().time);
       }),
       useAssets.subscribe((s, prev) => {
-        if (s.assets !== prev.assets && !usePlayback.getState().playing) this.showTime(usePlayback.getState().time);
+        if (s.assets === prev.assets) return;
+        this.sync();
+        if (this.state === 'paused') this.showTime(usePlayback.getState().time);
       }),
     );
   }
 
-  private get current(): Slot {
-    return this.slots[this.active];
+  private send(msg: PreviewRequest): void {
+    this.worker.postMessage(msg);
   }
 
-  private get spare(): Slot {
-    return this.slots[this.active === 0 ? 1 : 0];
+  private sync(): void {
+    const project = useEditor.getState().project;
+    if (project) this.send({ type: 'sync', project, assets: useAssets.getState().assets });
   }
 
-  private makeSlot(): Slot {
-    const slot: Slot = { el: makeVideo(), assetId: null, url: null, target: null, seeking: false };
-    slot.el.addEventListener('seeked', () => {
-      slot.seeking = false;
-      if (slot.target !== null && Math.abs(slot.el.currentTime - slot.target) > 0.02) this.seekSlot(slot, slot.target);
-      if (slot === this.current) this.draw();
-    });
-    slot.el.addEventListener('loadeddata', () => {
-      if (slot.target !== null) this.seekSlot(slot, slot.target);
-      if (slot === this.current) this.draw();
-    });
-    return slot;
+  private clampTime(): void {
+    const project = useEditor.getState().project;
+    if (!project) return;
+    const { time, setTime } = usePlayback.getState();
+    const total = projectDuration(project);
+    if (time > total) setTime(total);
   }
 
   resize(cssWidth: number, cssHeight: number): void {
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    // No point rendering above the 540p proxy resolution times ~1.5.
+    // No point rendering far above the 540p proxy resolution.
     const scale = Math.min(dpr, 810 / Math.max(1, cssWidth));
     this.compositor.resize(Math.round(cssWidth * scale), Math.round(cssHeight * scale));
-    this.draw();
+    this.compositor.draw(this.shown);
   }
 
-  private project(): Project | null {
-    return useEditor.getState().project;
+  private show(source: FrameSource | null): void {
+    if (this.shown && this.shown !== source) this.shown.frame.close();
+    this.shown = source;
+    this.compositor.draw(source);
   }
 
-  private clampTime(): void {
-    const p = this.project();
-    if (!p) return;
-    const total = p.main.reduce((s, c) => s + clipDuration(c), 0);
-    const { time, setTime } = usePlayback.getState();
-    if (time > total) setTime(total);
-  }
-
-  /** Resolves (and caches) a playable URL for an asset: proxy when ready, otherwise the OPFS original. */
-  private sourceUrl(asset: Asset): SourceUrl | null {
-    const wanted: SourceUrl['kind'] | null = asset.proxyPath ? 'proxy' : asset.originalPath ? 'original' : null;
-    if (!wanted) return null;
-    const cached = this.urls.get(asset.id);
-    if (cached?.kind === wanted) return cached;
-    const key = `${asset.id}:${wanted}`;
-    if (!this.pendingUrls.has(key)) {
-      const path = wanted === 'proxy' ? asset.proxyPath : asset.originalPath;
-      const pending = readFile(path as string)
-        .then((file) => {
-          if (this.destroyed) return null;
-          const entry: SourceUrl = { url: URL.createObjectURL(file), kind: wanted };
-          // Old URL stays valid until no slot uses it; revoked on destroy.
-          this.urls.set(asset.id, entry);
-          if (!usePlayback.getState().playing) this.showTime(usePlayback.getState().time);
-          return entry;
-        })
-        .catch(() => null);
-      this.pendingUrls.set(key, pending);
-    }
-    return cached ?? null;
-  }
-
-  /** Points a slot at asset/second. Returns false if the asset has no playable source yet. */
-  private load(slot: Slot, assetId: string, sec: number): boolean {
-    const asset = useAssets.getState().assets[assetId];
-    const source = asset ? this.sourceUrl(asset) : null;
-    if (!source) return false;
-    if (slot.url !== source.url) {
-      slot.url = source.url;
-      slot.assetId = assetId;
-      slot.seeking = false;
-      slot.el.src = source.url;
-      slot.el.load();
-    }
-    this.seekSlot(slot, sec);
-    return true;
-  }
-
-  private seekSlot(slot: Slot, sec: number): void {
-    slot.target = sec;
-    if (slot.seeking || slot.el.readyState < 1) return;
-    if (Math.abs(slot.el.currentTime - sec) < 0.001) return;
-    slot.seeking = true;
-    slot.el.currentTime = sec;
-  }
-
-  private draw(): void {
-    const slot = this.current;
-    this.compositor.draw(slot.assetId ? slot.el : null);
-  }
+  // ---- stills ----
 
   /** Shows the frame at timeline time `t` (paused). */
   showTime(t: number): void {
-    const p = this.project();
-    const hit = p ? locate(p, t) : null;
+    const project = useEditor.getState().project;
+    const hit = project ? locate(project, t) : null;
     if (!hit) {
-      this.current.assetId = null;
-      this.draw();
+      this.show(null);
       return;
     }
-    if (!this.load(this.current, hit.clip.assetId, hit.sourceSec)) this.draw();
+    this.requestStill(hit.clip.assetId, hit.sourceSec);
   }
 
   /** Shows a specific source frame, e.g. the edge being trimmed. */
   peek(assetId: string, sourceSec: number): void {
-    if (usePlayback.getState().playing) this.pause();
-    this.load(this.current, assetId, sourceSec);
+    if (this.state !== 'paused') this.pause();
+    this.requestStill(assetId, sourceSec);
   }
 
-  /** Must be called from a user gesture (iOS autoplay rules). */
+  private requestStill(assetId: string, sourceSec: number): void {
+    this.send({ type: 'still', id: ++this.stillId, assetId, sourceSec });
+  }
+
+  // ---- playback ----
+
+  /** Must be called from a user gesture: it creates/resumes the AudioContext (iOS autoplay rules). */
   play(): void {
-    const p = this.project();
-    if (!p || p.main.length === 0) return;
-    const total = p.main.reduce((s, c) => s + clipDuration(c), 0);
+    const project = useEditor.getState().project;
+    if (!project || project.main.length === 0 || this.state !== 'paused') return;
+    const total = projectDuration(project);
     const playback = usePlayback.getState();
-    let t = playback.time;
-    if (t >= total - END_EPS) t = 0;
-    const hit = locate(p, t);
-    if (!hit) return;
+    const from = playback.time >= total - 1 / 60 ? 0 : playback.time;
 
-    if (!this.unlocked) {
-      // Unlock both elements for audio while we're inside the gesture.
-      const other = this.spare;
-      if (!other.el.src) this.load(other, hit.clip.assetId, hit.sourceSec);
-      if (other.el.src) {
-        void other.el.play().catch(() => undefined);
-        other.el.pause();
-      }
-      this.unlocked = true;
-    }
+    const ctx = this.ensureAudio();
+    void ctx.resume();
 
-    const slot = this.current;
-    if (!this.load(slot, hit.clip.assetId, hit.sourceSec)) return;
-    slot.el.playbackRate = hit.clip.speed;
-    this.playingIndex = hit.index;
-    playback.setTime(t);
+    this.gen++;
+    this.from = from;
+    this.clearQueues();
+    this.state = 'starting';
+    this.gotAudio = false;
+    this.streamEnded = false;
+    this.consumed = 0;
+    this.playRequestedAt = performance.now();
+    if (from !== playback.time) playback.setTime(from);
     playback.setPlaying(true);
-    void slot.el.play().catch(() => this.pause());
+    this.send({ type: 'play', gen: this.gen, from });
     cancelAnimationFrame(this.raf);
     this.raf = requestAnimationFrame(this.tick);
   }
 
   pause(): void {
     cancelAnimationFrame(this.raf);
-    for (const s of this.slots) s.el.pause();
-    this.playingIndex = -1;
+    if (this.state !== 'paused') {
+      this.gen++;
+      this.send({ type: 'stop', gen: this.gen });
+    }
+    this.state = 'paused';
+    for (const node of this.nodes) {
+      try {
+        node.stop();
+      } catch {
+        // Not started yet.
+      }
+    }
+    this.nodes.clear();
+    this.clearQueues();
     usePlayback.getState().setPlaying(false);
   }
 
   toggle(): void {
-    if (usePlayback.getState().playing) this.pause();
-    else this.play();
+    if (this.state === 'paused') this.play();
+    else this.pause();
+  }
+
+  private ensureAudio(): AudioContext {
+    if (this.ctx) return this.ctx;
+    // Play through the ringer/silent switch like a video app (Safari 17+).
+    const session = (navigator as AudioSessionNavigator).audioSession;
+    if (session) session.type = 'playback';
+    const ctx = new AudioContext({ latencyHint: 'interactive' });
+    this.master = ctx.createGain();
+    this.master.connect(ctx.destination);
+    this.ctx = ctx;
+    return ctx;
+  }
+
+  private clearQueues(): void {
+    for (const f of this.queue) f.frame.close();
+    this.queue = [];
+    this.pendingAudio = [];
+  }
+
+  private clock(): number {
+    return this.ctx ? this.from + (this.ctx.currentTime - this.ctxStart) : this.from;
+  }
+
+  private beginClock(): void {
+    if (!this.ctx) return;
+    this.state = 'playing';
+    Object.assign(previewStats, { shown: 0, dropped: 0, maxGapMs: 0, maxGapAt: 0, lastShowAt: 0 });
+    this.ctxStart = this.ctx.currentTime + START_LEAD_SEC;
+    for (const chunk of this.pendingAudio) this.schedule(chunk);
+    this.pendingAudio = [];
+  }
+
+  private schedule(chunk: AudioChunk): void {
+    const { ctx, master } = this;
+    if (!ctx || !master) return;
+    const length = chunk.channels[0]?.length ?? 0;
+    if (length === 0) return;
+    const buffer = ctx.createBuffer(chunk.channels.length, length, chunk.sampleRate);
+    chunk.channels.forEach((data, c) => buffer.copyToChannel(data as Float32Array<ArrayBuffer>, c));
+    const node = ctx.createBufferSource();
+    node.buffer = buffer;
+    // Pitch follows speed, matching the export resampler.
+    node.playbackRate.value = chunk.speed;
+    node.connect(master);
+    const when = this.ctxStart + (chunk.t - this.from);
+    const now = ctx.currentTime;
+    if (when >= now) node.start(when);
+    else {
+      const offset = (now - when) * chunk.speed;
+      if (offset >= buffer.duration) return;
+      node.start(now, offset);
+    }
+    this.nodes.add(node);
+    node.onended = () => this.nodes.delete(node);
+  }
+
+  private onEvent(e: PreviewEvent): void {
+    switch (e.type) {
+      case 'still':
+        if (this.state !== 'paused' || e.id <= this.shownStillId) {
+          e.frame?.close();
+          return;
+        }
+        this.shownStillId = e.id;
+        this.show(e.frame ? { frame: e.frame, rotation: e.rotation } : null);
+        return;
+      case 'frame':
+        if (e.gen !== this.gen || this.state === 'paused') {
+          e.frame.close();
+          return;
+        }
+        this.queue.push({ frame: e.frame, rotation: e.rotation, t: e.t });
+        return;
+      case 'audio':
+        if (e.gen !== this.gen || this.state === 'paused') return;
+        this.gotAudio = true;
+        if (this.state === 'playing') this.schedule(e);
+        else this.pendingAudio.push(e);
+        return;
+      case 'end':
+        if (e.gen === this.gen) this.streamEnded = true;
+        return;
+    }
   }
 
   private readonly tick = () => {
-    const p = this.project();
-    const clip = p?.main[this.playingIndex];
-    if (!p || !clip) {
-      this.pause();
+    const project = useEditor.getState().project;
+    if (!project || this.state === 'paused') return;
+
+    if (this.state === 'starting') {
+      const waited = performance.now() - this.playRequestedAt;
+      const framesReady =
+        this.queue.length >= START_FRAMES || (this.queue.length > 0 && (this.streamEnded || waited > START_MAX_WAIT_MS));
+      if (framesReady && (this.gotAudio || waited > AUDIO_GRACE_MS)) this.beginClock();
+      this.raf = requestAnimationFrame(this.tick);
       return;
     }
-    const starts = clipStarts(p);
-    const start = starts[this.playingIndex] ?? 0;
-    const slot = this.current;
-    const el = slot.el;
-    const remaining = (clip.outSec - el.currentTime) / clip.speed;
-    const next = p.main[this.playingIndex + 1];
-    const other = this.spare;
 
-    if (next && remaining < PRELOAD_SEC && (other.assetId !== next.assetId || other.target !== next.inSec)) {
-      this.load(other, next.assetId, next.inSec);
+    const t = this.clock();
+    const total = projectDuration(project);
+    if (t >= total) {
+      this.pause();
+      usePlayback.getState().setTime(total);
+      return;
     }
 
-    if (el.ended || el.currentTime >= clip.outSec - END_EPS) {
-      if (!next) {
-        this.pause();
-        usePlayback.getState().setTime(start + clipDuration(clip));
-        return;
-      }
-      // Cut: swap to the preloaded element.
-      el.pause();
-      if (!this.load(other, next.assetId, next.inSec)) {
-        this.pause();
-        return;
-      }
-      this.active = this.active === 0 ? 1 : 0;
-      this.playingIndex++;
-      other.el.playbackRate = next.speed;
-      void other.el.play().catch(() => {
-        // Autoplay with sound refused (element never unlocked): keep the picture going, silently.
-        other.el.muted = true;
-        void other.el.play().catch(() => this.pause());
-      });
-      usePlayback.getState().setTime(starts[this.playingIndex] ?? 0);
-    } else {
-      const t = start + Math.max(0, el.currentTime - clip.inSec) / clip.speed;
-      usePlayback.getState().setTime(t);
+    // Show the newest frame that is due; drop any older ones the decoder delivered late.
+    let due = -1;
+    for (let i = 0; i < this.queue.length && (this.queue[i] as QueuedFrame).t <= t + 1 / 120; i++) due = i;
+    if (due >= 0) {
+      const frames = this.queue.splice(0, due + 1);
+      const latest = frames.pop() as QueuedFrame;
+      for (const f of frames) f.frame.close();
+      this.show({ frame: latest.frame, rotation: latest.rotation });
+      this.consumed += due + 1;
+      const shownAt = performance.now();
+      const gap = previewStats.lastShowAt ? shownAt - previewStats.lastShowAt : 0;
+      if (gap > previewStats.maxGapMs) Object.assign(previewStats, { maxGapMs: gap, maxGapAt: t });
+      previewStats.lastShowAt = shownAt;
+      previewStats.shown++;
+      previewStats.dropped += frames.length;
     }
-    this.draw();
+
+    const now = performance.now();
+    if (this.consumed >= ACK_EVERY_FRAMES || now - this.lastAck > ACK_EVERY_MS) {
+      this.send({ type: 'ack', gen: this.gen, frames: this.consumed, clock: t });
+      this.consumed = 0;
+      this.lastAck = now;
+    }
+
+    usePlayback.getState().setTime(Math.max(0, t));
     this.raf = requestAnimationFrame(this.tick);
   };
 
   destroy(): void {
-    this.destroyed = true;
     this.pause();
     for (const u of this.unsubscribers) u();
-    for (const s of this.slots) {
-      s.el.removeAttribute('src');
-      s.el.load();
-    }
-    for (const { url } of this.urls.values()) URL.revokeObjectURL(url);
+    this.worker.terminate();
+    this.show(null);
     this.compositor.destroy();
-    void this.canvas;
+    void this.ctx?.close();
   }
 }

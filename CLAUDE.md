@@ -33,8 +33,11 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - **Import** `src/engine/media/import.worker.ts` — copy original into OPFS → probe → ONE decode pass producing the
   540p proxy (H.264 2.5 Mbps, 0.5s GOP for fast seeks) plus poster and a thumbnail sprite (≤120 tiles). Serial queue.
   Interrupted imports resume from the OPFS original on next launch.
-- **Preview** `src/editor/preview/` — two `<video>` elements on proxies (HW decode), the spare one parked on the next
-  clip's in-point so cuts swap instantly; frames drawn by a WebGL2 compositor on one canvas. Scrub seeks coalesce.
+- **Preview** `src/editor/preview/` — `preview.worker.ts` decodes proxies with WebCodecs (Mediabunny `VideoSampleSink`)
+  and streams transferable `VideoFrame`s + PCM chunks ahead of the playhead (16-frame credit window, audio ≤4s ahead).
+  While a clip plays, the next clip's decoder is opened and pre-decoded, so cuts are seamless. Main thread
+  (`player.ts`) schedules audio on an AudioContext and uses that clock to pick frames; WebGL2 compositor draws them.
+  Paused scrubbing = single "still" requests, latest wins. `previewStats` (max frame gap, drops) is checked in e2e.
 - **Timeline** `src/editor/timeline/TimelineView.tsx` — single canvas, fixed centre playhead. Pan+inertia, pinch zoom,
   tap select, trim handles (snap to playhead), long-press reorder.
 - **Export** `src/engine/export/render.worker.ts` — renders the project from ORIGINALS: 30fps output frames map to
@@ -49,8 +52,9 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - **Rotation baked into pixels** (`allowTransformationMetadata: false`) so preview, export and every player agree.
 - Export preset lives in `src/engine/export/protocol.ts` (`TIKTOK_1080P30`).
 - **Speed shifts pitch** (export resampler + `preservesPitch=false` in preview). Pitch-preserving stretch is later work.
-- Preview uses `<video>` elements, not a WebCodecs player: iOS HW decode, built-in A/V sync, tiny main-thread cost.
-  Revisit only if Phase 5 (3 layers + transition) can't hold 30fps.
+- Preview is a WebCodecs player, not `<video>` elements: iOS ignores preload on paused videos, so swapping elements at
+  cuts stalled on `play()` (seen on iPhone in Phase 1 testing). Audio clock = AudioContext; `audioSession.type =
+  'playback'` so sound plays with the silent switch on.
 - Horizontal clips are letterboxed (`contain`) for now; blurred-background fill comes with the compositor work.
 - Removed clips' media stays in OPFS (undo can restore them); assets are garbage-collected when a project is deleted.
 - Never use `hardwareAcceleration: 'prefer-hardware'` — it's a hard requirement and fails without a HW encoder.
@@ -60,8 +64,7 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - Export plays in Photos and uploads to TikTok. 51s 1080×1920 export took 28s (0.55× RT). Safari undershoots requested H.264 bitrate (~6 of 10 Mbps).
 
 ## Known iOS quirks / risks
-- `<video>.play()` with sound needs a user gesture per element: the player "unlocks" both elements on the first Play
-  tap; if a later swap is still refused it continues muted rather than stopping.
+- AudioContext must be created/resumed inside a user gesture (the Play tap) or it stays suspended.
 - Worker + WebCodecs are suspended when the PWA is backgrounded. Wake lock prevents dimming, but switching apps
   pauses export. Must warn the user to keep PawCut open.
 - iPhone footage is usually HEVC, often 10-bit HDR (HLG / Dolby Vision). Re-encoding to 8-bit H.264 SDR without

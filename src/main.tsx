@@ -1,13 +1,14 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './app/App';
+import { previewStats } from './editor/preview/player';
 import { useAssets, useEditor, usePlayback } from './editor/store';
 import { codecProfile } from './engine/codecProfile';
 import './index.css';
 
 // Test hook for Playwright runs (engine-test codec profile only).
 if (codecProfile.video === 'vp9') {
-  Object.assign(window, { __pawcut: { editor: useEditor, assets: useAssets, playback: usePlayback } });
+  Object.assign(window, { __pawcut: { editor: useEditor, assets: useAssets, playback: usePlayback, previewStats } });
 }
 
 const root = document.getElementById('root');
