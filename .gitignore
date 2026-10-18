@@ -6,3 +6,4 @@ playwright-report
 *.local
 .DS_Store
 e2e/fixtures
+public/mediapipe
