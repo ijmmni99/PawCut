@@ -10,4 +10,15 @@ ffmpeg -v error -y -f lavfi -i "smptebars=size=1280x720:rate=30" -f lavfi -i "si
   -t 6 -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -b:v 2M -c:a libopus -ac 1 "$out/landscape-tmp.mp4"
 ffmpeg -v error -y -display_rotation 90 -i "$out/landscape-tmp.mp4" -c copy "$out/rotated.mp4"
 rm "$out/landscape-tmp.mp4"
+# Auto-Cut: 60s of static grey + silence with two "action" bursts:
+#   10–14s moving test pattern + tone, 40–44s a cat photo moving across the frame + tone.
+cat="$out/cat.jpg"
+[ -s "$cat" ] || curl -sSL -A "PawCutFixtures/1.0" -o "$cat" "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg"
+ffmpeg -v error -y \
+  -f lavfi -i "color=c=0x606060:size=720x1280:rate=30:duration=60" \
+  -f lavfi -i "testsrc2=size=720x1280:rate=30:duration=60" \
+  -loop 1 -framerate 30 -t 60 -i "$cat" \
+  -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=60" \
+  -filter_complex "[2]scale=600:-1[c];[0][1]overlay=enable='between(t,10,14)'[a];[a][c]overlay=x='-600+(t-40)*300':y=300:enable='between(t,40,44)'[v];[3]volume='if(between(t,10,14)+between(t,40,44),0.5,0)':eval=frame[au]" \
+  -map "[v]" -map "[au]" -t 60 -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -b:v 1M -c:a libopus "$out/autocut.mp4"
 echo "fixtures written to $out"
