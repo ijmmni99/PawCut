@@ -7,7 +7,7 @@ Primary target: iPhone Safari installed to Home Screen. No desktop layout.
 - `npm run dev` — Vite dev server (sends COOP/COEP headers)
 - `npm run build` — typecheck + production build (`dist/`)
 - `npm run preview` — serve `dist/` with COOP/COEP
-- `npm test` — Vitest unit tests (timeline model, audio resampling)
+- `npm test` — Vitest unit tests (timeline model, audio resampling, Auto-Cut scoring/selection)
 - `./scripts/make-fixtures.sh` then `npx playwright test` — e2e on Chromium (iPhone 13 emulation). Chromium has no
   H.264/AAC, so tests open the app with `?codec=vp9` (VP9/Opus everywhere, same pipeline; also exposes
   `window.__pawcut` stores for assertions). Phase 0 spike test needs `PAWCUT_SPIKE_VIDEO=/path/to/video`.
@@ -43,6 +43,16 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - **Export** `src/engine/export/render.worker.ts` — renders the project from ORIGINALS: 30fps output frames map to
   source times via `CanvasSink.canvasesAtTimestamps`; audio decoded per 5s window and speed-resampled to 48k stereo
   (`src/engine/audio/resample.ts`), 5ms fades at cuts. Streams to OPFS.
+- **Auto-Cut** `src/ai/autocut/` — `analyze.worker.ts` reads the proxy once: 4 samples/s at 96px short side for
+  grid frame-difference motion (local vs camera/global), brightness, Laplacian sharpness; MediaPipe ObjectDetector
+  (EfficientDet-Lite0 int8, CPU, every 0.5s, halved if >80ms) for cat/dog/person presence + box movement; audio RMS
+  per 50ms → per-0.25s loudness + onsets. Raw features cached in Dexie `analyses` (bump `ANALYSIS_VERSION` when
+  changing extraction). `score.ts` (pure, tested) combines them into a 0..1 interest score, picks peaks (prominence
+  ≥0.1, score ≥0.3), grows segments (Chill 2–4s, Hype 0.8–1.8s), pads with lead-in/out before unrelated footage,
+  and builds clips (Hype: top 2 segments become 1.5×→0.5×→1.5× stepped ramps). Modes: Highlights / Remove dead air
+  / Cut silences. Apply replaces the main track in one undo step.
+- MediaPipe runtime is copied from node_modules to `public/mediapipe/` by `scripts/copy-mediapipe.mjs` (pre-dev /
+  pre-build, gitignored); model committed in `public/models/`. Both runtime-cached by the SW, not precached.
 - Phase 0 spike lives on as Diagnostics (`#/diagnostics`, gear icon on projects screen).
 
 ## Decisions
@@ -57,6 +67,9 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   'playback'` so sound plays with the silent switch on.
 - Horizontal clips are letterboxed (`contain`) for now; blurred-background fill comes with the compositor work.
 - Removed clips' media stays in OPFS (undo can restore them); assets are garbage-collected when a project is deleted.
+- Detector assets are self-hosted: Google's model bucket sends no CORS headers, which COEP `require-corp` blocks.
+- Beat sync and punch-zoom for Hype wait for Music (Phase 3) and keyframes (Phase 5).
+- e2e runs with `workers: 1`: media tests in parallel starve each other and skew the smoothness checks.
 - Never use `hardwareAcceleration: 'prefer-hardware'` — it's a hard requirement and fails without a HW encoder.
 
 ## Phase 0 findings — PASSED (see docs/phase0-report.md)
