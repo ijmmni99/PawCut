@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { detectCapabilities, type Capabilities, type CodecProbe } from '../engine/capabilities';
 import { readOpfsFile, startExport, type ExportHandle } from '../engine/export/exportClient';
 import { ENGINE_TEST_PRESET, TIKTOK_1080P30, type SourceInfo } from '../engine/export/protocol';
+import type { Asset } from '../editor/timeline/model';
 import { holdWakeLock } from '../engine/wakeLock';
+import { db } from '../library/db';
 import { navigate } from './router';
 import { Icon } from './ui/Icon';
 
@@ -33,12 +35,16 @@ export function SpikeScreen() {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [heap, setHeap] = useState<HeapSample>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [imports, setImports] = useState<Asset[]>([]);
   const [copied, setCopied] = useState(false);
   const handle = useRef<ExportHandle | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     void detectCapabilities().then(setCaps);
+    void db.assets
+      .toArray()
+      .then((list) => setImports(list.filter((a) => a.prepStats).sort((a, b) => b.createdAt - a.createdAt).slice(0, 5)));
     void navigator.storage?.persist?.().then(setPersisted, () => setPersisted(false));
   }, []);
 
@@ -110,7 +116,7 @@ export function SpikeScreen() {
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
 
-  const report = buildReport(caps, input, probe, phase, heap, persisted);
+  const report = buildReport(caps, input, probe, phase, heap, persisted, imports);
 
   const copyReport = async () => {
     try {
@@ -206,6 +212,17 @@ export function SpikeScreen() {
         )}
       </section>
 
+      {imports.length > 0 && (
+        <section className="rounded-2xl bg-zinc-900 p-4 text-sm">
+          <h2 className="mb-2 font-bold">Recent imports</h2>
+          {imports.map((a) => (
+            <p key={a.id} className="py-1 text-zinc-300">
+              {importLine(a)}
+            </p>
+          ))}
+        </section>
+      )}
+
       <section className="rounded-2xl bg-zinc-900 p-4">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="font-bold">Device report</h2>
@@ -265,6 +282,13 @@ function CapsView({ caps }: { caps: Capabilities }) {
   );
 }
 
+function importLine(a: Asset): string {
+  const p = a.prepStats;
+  if (!p) return a.name;
+  const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+  return `${a.name} · ${a.width}×${a.height} · ${fmtSec(a.durationSec)} → copy ${sec(p.copyMs)}, proxy ${sec(p.totalMs)} (decode ${sec(p.decodeMs)}, scale[${p.scaler}] ${sec(p.drawMs)}, encode ${sec(p.encodeMs)}, ${p.kept}/${p.frames} frames)${p.bench ? ` bench ${JSON.stringify(p.bench)}ms/frame` : ''}`;
+}
+
 function buildReport(
   caps: Capabilities | null,
   input: File | null,
@@ -272,6 +296,7 @@ function buildReport(
   phase: Phase,
   heap: HeapSample,
   persisted: boolean | null,
+  imports: Asset[],
 ): string {
   const lines: string[] = ['PawCut Phase 0 report', `Date: ${new Date().toISOString()}`];
   if (caps) {
@@ -314,5 +339,6 @@ function buildReport(
     lines.push(`Running: ${(phase.progress * 100).toFixed(0)}%`);
   }
   if (heap) lines.push(`JS heap peak: ${heap.peakMB.toFixed(0)} MB`);
+  if (imports.length) lines.push('Recent imports:', ...imports.map((a) => `  ${importLine(a)}`));
   return lines.join('\n');
 }

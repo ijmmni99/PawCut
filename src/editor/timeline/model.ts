@@ -27,6 +27,23 @@ export type Asset = {
   thumbColumns: number;
   thumbSize: number;
   createdAt: number;
+  /** How long preparing the proxy took, per stage (shown in Diagnostics to tune import speed). */
+  prepStats?: PrepStats | null;
+};
+
+export type PrepStats = {
+  /** Copying the original into app storage. */
+  copyMs: number;
+  /** Building the proxy (decode + scale + encode + audio). */
+  totalMs: number;
+  decodeMs: number;
+  drawMs: number;
+  encodeMs: number;
+  frames: number;
+  kept: number;
+  scaler: 'gl' | 'bitmap' | '2d';
+  /** Median ms per frame for each scaler tried. */
+  bench?: Partial<Record<'gl' | 'bitmap' | '2d', number>>;
 };
 
 export type Clip = {

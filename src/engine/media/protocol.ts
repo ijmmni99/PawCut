@@ -1,3 +1,4 @@
+import type { PrepStats } from '../../editor/timeline/model';
 import type { CodecProfile } from '../codecProfile';
 
 export type ImportRequest = {
@@ -24,6 +25,7 @@ export type ProxyResult = {
   thumbCount: number;
   thumbColumns: number;
   thumbSize: number;
+  prepStats: PrepStats;
 };
 
 export type ImportEvent =
