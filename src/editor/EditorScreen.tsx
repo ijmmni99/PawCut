@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { navigate } from '../app/router';
 import { formatDuration } from '../app/share';
 import { Icon, type IconName } from '../app/ui/Icon';
@@ -10,6 +10,9 @@ import { useEditor, usePlayback } from './store';
 import { TimelineView } from './timeline/TimelineView';
 import { duplicateClip, locate, projectDuration, removeClips, splitAt } from './timeline/model';
 import { SpeedSheet } from './tools/SpeedSheet';
+
+// Auto-Cut (analysis worker, MediaPipe) only loads when first opened.
+const AutoCutSheet = lazy(() => import('../ai/autocut/AutoCutSheet').then((m) => ({ default: m.AutoCutSheet })));
 
 /** Clips a tool acts on: the selection, or the clip under the playhead. */
 function targetClipIds(): string[] {
@@ -100,7 +103,7 @@ export function EditorScreen({ projectId }: { projectId: string }) {
   const { apply, undo, redo, select } = useEditor.getState();
 
   const [missing, setMissing] = useState(false);
-  const [sheet, setSheet] = useState<'speed' | 'export' | null>(null);
+  const [sheet, setSheet] = useState<'speed' | 'export' | 'autocut' | null>(null);
   const [speedTargets, setSpeedTargets] = useState<string[]>([]);
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -305,6 +308,15 @@ export function EditorScreen({ projectId }: { projectId: string }) {
 
       <nav className="flex gap-1 overflow-x-auto border-t border-zinc-800 px-2 pb-[calc(env(safe-area-inset-bottom)+4px)] pt-1">
         <ToolButton icon="plus" label="Add" onClick={() => fileInput.current?.click()} />
+        <ToolButton
+          icon="sparkle"
+          label="Auto-Cut"
+          onClick={() => {
+            playerRef.current?.pause();
+            setSheet('autocut');
+          }}
+          disabled={!hasTarget}
+        />
         <ToolButton icon="split" label="Split" onClick={split} disabled={!hasTarget} />
         <ToolButton icon="speed" label="Speed" onClick={openSpeed} disabled={!hasTarget} />
         <ToolButton icon="copy" label="Duplicate" onClick={duplicate} disabled={!hasTarget} />
@@ -313,6 +325,11 @@ export function EditorScreen({ projectId }: { projectId: string }) {
 
       <input ref={fileInput} type="file" accept="video/*" multiple className="hidden" onChange={onPick} />
       <SpeedSheet open={sheet === 'speed'} onClose={closeSheet} clipIds={speedTargets} />
+      {sheet === 'autocut' && (
+        <Suspense fallback={null}>
+          <AutoCutSheet open onClose={closeSheet} />
+        </Suspense>
+      )}
       <ExportSheet open={sheet === 'export'} onClose={closeSheet} />
     </div>
   );

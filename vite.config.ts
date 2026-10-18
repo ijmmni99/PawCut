@@ -35,8 +35,17 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2,wasm}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        globIgnores: ['mediapipe/**', 'models/**'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        // AI runtimes/models are big: cached on first use instead of at install.
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/mediapipe/') || url.pathname.startsWith('/models/'),
+            handler: 'CacheFirst',
+            options: { cacheName: 'ai-models', expiration: { maxEntries: 20 } },
+          },
+        ],
       },
     }),
   ],
