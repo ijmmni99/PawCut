@@ -95,9 +95,12 @@ describe('pickHighlights', () => {
     expect(segs[0]?.end).toBeLessThanOrEqual(13.5);
     expect(segs[1]?.start).toBeGreaterThanOrEqual(39.5);
     expect(segs[1]?.end).toBeLessThanOrEqual(42.5);
-    // A longer target pads with the next best material and still stays near the target.
+    // A longer target pads with lead-in/out around the same moments, not unrelated footage.
     const padded = pickHighlights([source(boringWithBursts())], 8, 'chill');
-    expect(padded.reduce((t, s) => t + s.end - s.start, 0)).toBeLessThanOrEqual(8.05);
+    expect(padded.reduce((t, s) => t + s.end - s.start, 0)).toBeCloseTo(8, 1);
+    expect(padded).toHaveLength(2);
+    expect(padded[0]!.start).toBeLessThanOrEqual(10);
+    expect(padded[0]!.end).toBeGreaterThanOrEqual(13);
     for (let i = 1; i < segs.length; i++) expect(segs[i]!.start).toBeGreaterThan(segs[i - 1]!.start);
   });
 

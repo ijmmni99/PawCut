@@ -106,6 +106,9 @@ export const STYLE_LENGTHS: Record<Style, { min: number; max: number }> = {
 };
 
 const GAP = 0.25;
+const MIN_PEAK = 0.3;
+const MIN_PROMINENCE = 0.1;
+const PEAK_RADIUS = 2;
 
 function binRange(src: SourceRange): [number, number] {
   const b = src.scored.binSec;
@@ -155,9 +158,17 @@ export function pickHighlights(sources: readonly SourceRange[], targetSec: numbe
     const s = src.scored.score;
     for (let i = lo; i < hi; i++) {
       const v = s[i] ?? 0;
-      let isPeak = true;
-      for (let j = Math.max(lo, i - 2); j <= Math.min(hi - 1, i + 2); j++) if ((s[j] ?? 0) > v) isPeak = false;
-      if (isPeak) peaks.push({ source, bin: i, score: v });
+      if (v < MIN_PEAK) continue;
+      // A peak is the local maximum within ±0.5s AND stands out from its surroundings (flat stretches aren't peaks).
+      let isMax = true;
+      let lowest = v;
+      for (let j = Math.max(lo, i - PEAK_RADIUS); j <= Math.min(hi - 1, i + PEAK_RADIUS); j++) {
+        if ((s[j] ?? 0) > v) isMax = false;
+      }
+      for (let j = Math.max(lo, i - 4 * PEAK_RADIUS); j <= Math.min(hi - 1, i + 4 * PEAK_RADIUS); j++) {
+        lowest = Math.min(lowest, s[j] ?? 0);
+      }
+      if (isMax && v - lowest >= MIN_PROMINENCE) peaks.push({ source, bin: i, score: v });
     }
   });
   peaks.sort((x, y) => y.score - x.score);
@@ -176,17 +187,19 @@ export function pickHighlights(sources: readonly SourceRange[], targetSec: numbe
     }
   };
   addFrom(peaks);
+  if (total < targetSec) total = extendForContext(sources, chosen, targetSec, style, total);
   if (total < targetSec) {
-    // Not enough distinct peaks: fall back to every bin, best first.
+    // Still short: every bin, best first; ties go to footage nearest the moments already chosen.
+    const distance = (source: number, sec: number) =>
+      Math.min(Infinity, ...chosen.filter((c) => c.source === source).map((c) => Math.max(c.start - sec, sec - c.end, 0)));
     const all = sources.flatMap((src, source) => {
       const [lo, hi] = binRange(src);
-      return Array.from({ length: Math.max(0, hi - lo) }, (_, k) => ({
-        source,
-        bin: lo + k,
-        score: src.scored.score[lo + k] ?? 0,
-      }));
+      return Array.from({ length: Math.max(0, hi - lo) }, (_, k) => {
+        const bin = lo + k;
+        return { source, bin, score: src.scored.score[bin] ?? 0, near: distance(source, bin * src.scored.binSec) };
+      });
     });
-    addFrom(all.sort((x, y) => y.score - x.score));
+    addFrom(all.sort((x, y) => y.score - x.score || x.near - y.near));
   }
 
   // Overshoot: trim the weakest segment's tail, never below the style minimum.
@@ -201,6 +214,54 @@ export function pickHighlights(sources: readonly SourceRange[], targetSec: numbe
     }
   }
   return chosen.sort((x, y) => x.source - y.source || x.start - y.start);
+}
+
+/**
+ * Short of material: give the chosen moments lead-in/lead-out (up to 2× the style's max length) before falling back
+ * to unrelated footage, so padding is context around the action rather than random filler.
+ */
+function extendForContext(
+  sources: readonly SourceRange[],
+  chosen: Segment[],
+  targetSec: number,
+  style: Style,
+  total: number,
+): number {
+  // Hype keeps its cuts short: it pads with extra short cuts near the action instead (see pickHighlights).
+  const cap = style === 'hype' ? STYLE_LENGTHS.hype.max : STYLE_LENGTHS.chill.max * 2;
+  const added = new Map<Segment, { left: number; right: number }>(chosen.map((c) => [c, { left: 0, right: 0 }]));
+  let grew = true;
+  while (total < targetSec - 1e-6 && grew) {
+    grew = false;
+    for (const seg of [...chosen].sort((a, b) => b.score - a.score)) {
+      if (total >= targetSec - 1e-6) break;
+      const src = sources[seg.source];
+      const room = cap - (seg.end - seg.start);
+      if (!src || room <= 1e-6) continue;
+      const b = src.scored.binSec;
+      const step = Math.min(b, targetSec - total, room);
+      const others = chosen.filter((o) => o !== seg);
+      const canLeft = seg.start - step >= src.inSec && !overlaps({ ...seg, start: seg.start - step }, others);
+      const canRight = seg.end + step <= src.outSec && !overlaps({ ...seg, end: seg.end + step }, others);
+      const scoreAt = (t: number) => src.scored.score[Math.floor(t / b)] ?? 0;
+      const pad = added.get(seg) ?? { left: 0, right: 0 };
+      // Prefer the more interesting side; on a tie, balance lead-in against lead-out.
+      const rightScore = scoreAt(seg.end);
+      const leftScore = scoreAt(seg.start - step);
+      const goRight = canRight && (!canLeft || rightScore > leftScore || (rightScore === leftScore && pad.right <= pad.left));
+      if (goRight) {
+        seg.end += step;
+        pad.right += step;
+      } else if (canLeft) {
+        seg.start -= step;
+        pad.left += step;
+      } else continue;
+      added.set(seg, pad);
+      total += step;
+      grew = true;
+    }
+  }
+  return total;
 }
 
 /** Manually adds the best segment around `atSec` of a source (heatmap tap). */
