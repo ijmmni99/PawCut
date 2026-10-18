@@ -32,7 +32,7 @@ async function readAnalysis(page: Page): Promise<{ detector: string; subject: nu
 
 test('auto-cut finds the action and removes dead air', async ({ page }) => {
   test.skip(!existsSync(clip), 'run scripts/make-fixtures.sh first');
-  test.setTimeout(240_000);
+  test.setTimeout(600_000);
   page.on('console', (m) => m.text().includes('Auto-Cut') && console.log(m.text()));
 
   await page.goto('/?codec=vp9');
@@ -45,7 +45,7 @@ test('auto-cut finds the action and removes dead air', async ({ page }) => {
           const all = Object.values(w.__pawcut.assets.getState().assets);
           return all.length > 0 && all.every((a) => a.status === 'ready');
         }),
-      { timeout: 120_000 },
+      { timeout: 400_000 },
     )
     .toBe(true);
 

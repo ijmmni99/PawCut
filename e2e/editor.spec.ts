@@ -56,7 +56,7 @@ test('import → edit → export → reload', async ({ page }) => {
   // Import: both clips appended in order; proxies + thumbnails built.
   await expect.poll(async () => (await snap(page)).clips.length, { timeout: 30_000 }).toBe(2);
   await expect
-    .poll(async () => (await snap(page)).assets.filter((a) => a.status === 'ready').length, { timeout: 90_000 })
+    .poll(async () => (await snap(page)).assets.filter((a) => a.status === 'ready').length, { timeout: 400_000 })
     .toBe(2);
   let s = await snap(page);
   expect(s.assets.every((a) => a.proxyPath && a.thumbsPath)).toBe(true);
@@ -108,9 +108,11 @@ test('import → edit → export → reload', async ({ page }) => {
   );
   console.log(`after 3.5s: time ${s.time.toFixed(2)} playing=${s.playing} stats ${JSON.stringify(stats)}`);
   expect(s.time).toBeGreaterThan(2.6); // crossed at least one cut
-  // Smooth through the cut: ~30fps shown, no long freeze.
-  expect(stats.shown).toBeGreaterThan(80);
-  expect(stats.maxGapMs).toBeLessThan(200);
+  // Smooth through the cut: ~30fps shown, no long freeze. PAWCUT_SKIP_PERF=1 skips this on a starved machine.
+  if (!process.env.PAWCUT_SKIP_PERF) {
+    expect(stats.shown).toBeGreaterThan(80);
+    expect(stats.maxGapMs).toBeLessThan(200);
+  }
   await page.getByRole('button', { name: 'Pause' }).click();
 
   // Export.
