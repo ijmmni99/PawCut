@@ -77,6 +77,7 @@ export async function collectUnusedAssets(candidates: Set<string>): Promise<void
   if (editing) for (const a of referencedAssets(editing)) inUse.add(a);
   const unused = [...candidates].filter((a) => !inUse.has(a));
   await db.assets.bulkDelete(unused);
+  await db.analyses.bulkDelete(unused);
   useAssets.getState().remove(unused);
   await Promise.all(unused.map((a) => removeEntry(assetDir(a))));
 }
