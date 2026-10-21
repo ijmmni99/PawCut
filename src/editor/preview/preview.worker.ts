@@ -3,6 +3,7 @@
 // (as transferable VideoFrames) and PCM audio chunks to the main thread, running ahead of the playhead so cuts are
 // already decoded before they're reached. Credit-based backpressure keeps only a handful of frames in flight.
 import { ALL_FORMATS, AudioSampleSink, BlobSource, Input, type VideoSample, VideoSampleSink } from 'mediabunny';
+import { type TransferCode, trackTransfer } from '../../engine/media/hdr';
 import { readFile } from '../../engine/storage/opfs';
 import { type Asset, type Clip, type Project, clipDuration } from '../timeline/model';
 import type { PreviewEvent, PreviewRequest } from './protocol';
@@ -30,6 +31,18 @@ const post = (e: PreviewEvent, transfer: Transferable[] = []) => self.postMessag
 // ---- media inputs (one per asset; switches from original to proxy once the proxy exists) ----
 
 const inputs = new Map<string, { path: string; input: Input }>();
+/** HDR transfer per file, from its metadata (Safari doesn't always label decoded frames). */
+const transfers = new Map<Input, Promise<TransferCode>>();
+
+async function transferOf(input: Input): Promise<TransferCode> {
+  let t = transfers.get(input);
+  if (!t) {
+    t = input.getPrimaryVideoTrack().then((track) => (track ? trackTransfer(track) : 0));
+    transfers.set(input, t);
+  }
+  return t;
+}
+
 /** Long-lived sinks for stills, so scrubbing reuses one decoder per file. */
 const videoSinks = new Map<Input, VideoSampleSink>();
 
@@ -41,6 +54,7 @@ async function inputFor(assetId: string): Promise<Input | null> {
   if (cached?.path === path) return cached.input;
   if (cached) {
     videoSinks.delete(cached.input);
+    transfers.delete(cached.input);
     cached.input.dispose();
   }
   const input = new Input({ source: new BlobSource(await readFile(path)), formats: ALL_FORMATS });
@@ -79,6 +93,7 @@ function timeline(from: number): Array<{ clip: Clip; start: number }> {
 /** One clip's decoded-sample stream. The next clip's stream is opened and pre-decoded while the current one plays. */
 type ClipStream = {
   iter: AsyncGenerator<VideoSample> | null;
+  transfer: TransferCode;
   buffer: VideoSample[];
   done: boolean;
   pump: Promise<void>;
@@ -88,7 +103,7 @@ type ClipStream = {
 const PREFETCH_SAMPLES = 4;
 
 function openStream(clip: Clip, srcFrom: number): ClipStream {
-  const cs: ClipStream = { iter: null, buffer: [], done: false, pump: Promise.resolve() };
+  const cs: ClipStream = { iter: null, transfer: 0, buffer: [], done: false, pump: Promise.resolve() };
   cs.pump = (async () => {
     const input = await inputFor(clip.assetId);
     const track = await input?.getPrimaryVideoTrack();
@@ -96,6 +111,7 @@ function openStream(clip: Clip, srcFrom: number): ClipStream {
       cs.done = true;
       return;
     }
+    cs.transfer = input ? await transferOf(input) : 0;
     cs.iter = new VideoSampleSink(track).samples(srcFrom, clip.outSec);
   })();
   return cs;
@@ -167,7 +183,7 @@ async function streamVideo(myGen: number, from: number): Promise<void> {
         sample.close();
         inFlight++;
         lastT = t;
-        post({ type: 'frame', gen: myGen, t: Math.max(t, start), frame, rotation }, [frame]);
+        post({ type: 'frame', gen: myGen, t: Math.max(t, start), frame, rotation, transfer: current.transfer }, [frame]);
         // Once this clip is flowing, warm up the next one in the background.
         if (!next && nextEntry) {
           next = openStream(nextEntry.clip, srcFromOf(i + 1));
@@ -268,13 +284,14 @@ async function serveStills(): Promise<void> {
       if (stillRequest) continue;
       const sample = sink ? await sink.getSample(sourceSec).catch(() => null) : null;
       if (!sample) {
-        post({ type: 'still', id, frame: null, rotation: 0 });
+        post({ type: 'still', id, frame: null, rotation: 0, transfer: 0 });
         continue;
       }
       const frame = sample.toVideoFrame();
       const rotation = sample.rotation;
       sample.close();
-      post({ type: 'still', id, frame, rotation }, [frame]);
+      const transfer = input ? await transferOf(input) : 0;
+      post({ type: 'still', id, frame, rotation, transfer }, [frame]);
     }
   } finally {
     stillBusy = false;

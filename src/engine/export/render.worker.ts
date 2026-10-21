@@ -20,6 +20,7 @@ import {
 } from 'mediabunny';
 import { type Asset, type Clip, type Project, clipDuration } from '../../editor/timeline/model';
 import { type Pcm, applyEdgeFades, renderSpeedResampled } from '../audio/resample';
+import { trackTransfer } from '../media/hdr';
 import { type FrameScaler, createContainScaler } from '../media/scaler';
 import { readFile } from '../storage/opfs';
 import { createOpfsTarget } from '../storage/opfsWriter';
@@ -124,10 +125,12 @@ async function clipFrames(
   height: number,
   times: Iterable<number>,
 ): Promise<AsyncIterable<CanvasImageSource | null>> {
-  if (await track.hasHighDynamicRange()) {
+  const transfer = await trackTransfer(track);
+  if (transfer !== 0) {
     hdrScaler ??= createContainScaler(width, height);
     const scaler = hdrScaler;
     if (scaler) {
+      scaler.sourceTransfer = transfer;
       const samples = new VideoSampleSink(track).samplesAtTimestamps(times);
       return (async function* () {
         for await (const sample of samples) {

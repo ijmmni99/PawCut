@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toSdr, transferCode } from './hdr';
+import { shaderTransfer, toSdr, trackTransfer, transferCode } from './hdr';
 
 describe('HDR → SDR', () => {
   it('detects transfer functions', () => {
@@ -7,6 +7,21 @@ describe('HDR → SDR', () => {
     expect(transferCode({ transfer: 'pq' })).toBe(2);
     expect(transferCode({ transfer: 'bt709' })).toBe(0);
     expect(transferCode(null)).toBe(0);
+  });
+
+  it('falls back to the track metadata when frames are unlabelled (Safari)', async () => {
+    // No VideoFrame in Node, so the upload probe assumes a raw upload (the Safari case).
+    expect(shaderTransfer({ transfer: null }, 1)).toBe(1);
+    expect(shaderTransfer({ transfer: 'bt709' }, 1)).toBe(1);
+    expect(shaderTransfer({ transfer: 'pq' }, 1)).toBe(2);
+    expect(shaderTransfer(null, 0)).toBe(0);
+    const track = (transfer: string | null, hdr: boolean) => ({
+      getColorSpace: async () => ({ transfer }),
+      hasHighDynamicRange: async () => hdr,
+    });
+    expect(await trackTransfer(track('hlg', true))).toBe(1);
+    expect(await trackTransfer(track(null, true))).toBe(1);
+    expect(await trackTransfer(track('bt709', false))).toBe(0);
   });
 
   it('passes SDR through untouched', () => {

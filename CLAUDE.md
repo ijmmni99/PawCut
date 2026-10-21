@@ -63,8 +63,10 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   compositor (originals shown before the proxy exists), the proxy scaler (forces the WebGL scaler for HDR) and
   export (HDR clips render through a WebGL contain-scaler instead of CanvasSink). `hdrUploadIsRaw()` probes once
   per thread with a synthetic 10-bit HLG frame whether the browser already converts HDR on WebGL upload
-  (Chromium does, for 10-bit only) — then the shader passes through to avoid double conversion. Proxies are
-  versioned (`PROXY_VERSION` = 2); older ones are rebuilt in the background on launch (only if the source is HDR).
+  (Chromium does, for 10-bit only) — then the shader passes through to avoid double conversion. Safari may not
+  label decoded frames, so the transfer falls back to the track's colour metadata (`trackTransfer`, colr/VUI);
+  `asset.color` records it (Diagnostics). Proxies are versioned (`PROXY_VERSION` = 3); older ones are rebuilt in
+  the background on launch (only if the source is HDR).
 - Phase 0 spike lives on as Diagnostics (`#/diagnostics`, gear icon on projects screen): build version
   (`__APP_VERSION__` = commit · build time), Check for updates, recent imports, device report.
 - **Updates** `src/pwa/updates.ts` — SW `update()` on every return to foreground + every 30 min (installed iOS apps

@@ -27,11 +27,15 @@ export type Asset = {
   thumbColumns: number;
   thumbSize: number;
   createdAt: number;
+  /** Source colour metadata (from the file), shown in Diagnostics. */
+  color?: AssetColor;
   /** Proxy generation the files were built with (see PROXY_VERSION). Missing = 1. */
   proxyVersion?: number;
   /** How long preparing the proxy took, per stage (shown in Diagnostics to tune import speed). */
   prepStats?: PrepStats | null;
 };
+
+export type AssetColor = { primaries: string | null; transfer: string | null; hdr: boolean };
 
 export type PrepStats = {
   /** Copying the original into app storage. */

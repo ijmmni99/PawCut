@@ -246,14 +246,14 @@ export class PreviewPlayer {
           return;
         }
         this.shownStillId = e.id;
-        this.show(e.frame ? { frame: e.frame, rotation: e.rotation } : null);
+        this.show(e.frame ? { frame: e.frame, rotation: e.rotation, transfer: e.transfer } : null);
         return;
       case 'frame':
         if (e.gen !== this.gen || this.state === 'paused') {
           e.frame.close();
           return;
         }
-        this.queue.push({ frame: e.frame, rotation: e.rotation, t: e.t });
+        this.queue.push({ frame: e.frame, rotation: e.rotation, transfer: e.transfer, t: e.t });
         return;
       case 'audio':
         if (e.gen !== this.gen || this.state === 'paused') return;
@@ -305,7 +305,7 @@ export class PreviewPlayer {
       const frames = this.queue.splice(0, due + 1);
       const latest = frames.pop() as QueuedFrame;
       for (const f of frames) f.frame.close();
-      this.show({ frame: latest.frame, rotation: latest.rotation });
+      this.show({ frame: latest.frame, rotation: latest.rotation, transfer: latest.transfer });
       this.consumed += due + 1;
       const shownAt = performance.now();
       const gap = previewStats.lastShowAt ? shownAt - previewStats.lastShowAt : 0;

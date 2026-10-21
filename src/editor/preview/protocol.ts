@@ -1,3 +1,4 @@
+import type { TransferCode } from '../../engine/media/hdr';
 import type { Asset, Project } from '../timeline/model';
 
 export type PreviewRequest =
@@ -11,8 +12,8 @@ export type PreviewRequest =
   | { type: 'still'; id: number; assetId: string; sourceSec: number };
 
 export type PreviewEvent =
-  | { type: 'frame'; gen: number; t: number; frame: VideoFrame; rotation: number }
+  | { type: 'frame'; gen: number; t: number; frame: VideoFrame; rotation: number; transfer: TransferCode }
   | { type: 'audio'; gen: number; t: number; speed: number; sampleRate: number; channels: Float32Array[] }
   | { type: 'end'; gen: number }
   | { type: 'error'; gen: number; message: string }
-  | { type: 'still'; id: number; frame: VideoFrame | null; rotation: number };
+  | { type: 'still'; id: number; frame: VideoFrame | null; rotation: number; transfer: TransferCode };

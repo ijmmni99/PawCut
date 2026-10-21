@@ -19,6 +19,7 @@ import type { PrepStats } from '../../editor/timeline/model';
 import type { CodecProfile } from '../codecProfile';
 import { assetDir, readFile } from '../storage/opfs';
 import { copyBlobToOpfs, createOpfsTarget, writeBlobToOpfs } from '../storage/opfsWriter';
+import { trackTransfer } from './hdr';
 import { AdaptiveScaler } from './scaler';
 import { PROXY_VERSION, type ImportEvent, ImportRequest, ProbeResult, ProxyResult } from './protocol';
 
@@ -52,7 +53,18 @@ async function probe(input: Input, originalPath: string): Promise<ProbeResult> {
     input.getPrimaryAudioTrack(),
   ]);
   if (!video) throw new Error('No video track found');
-  return { durationSec, width: video.displayWidth, height: video.displayHeight, hasAudio: audio !== null, originalPath };
+  const [cs, hdr] = await Promise.all([
+    video.getColorSpace().catch(() => ({}) as VideoColorSpaceInit),
+    video.hasHighDynamicRange().catch(() => false),
+  ]);
+  return {
+    durationSec,
+    width: video.displayWidth,
+    height: video.displayHeight,
+    hasAudio: audio !== null,
+    originalPath,
+    color: { primaries: cs.primaries ?? null, transfer: cs.transfer ?? null, hdr },
+  };
 }
 
 async function buildProxy(
@@ -88,6 +100,7 @@ async function buildProxy(
   if (!video) throw new Error('No video track found');
   const audio = await input.getPrimaryAudioTrack();
   const scaler = new AdaptiveScaler(width, height);
+  scaler.setSourceTransfer(await trackTransfer(video));
   let prepStats: PrepStats | null = null;
 
   // Versioned names: an upgrade writes new files while the old proxy may still be playing.

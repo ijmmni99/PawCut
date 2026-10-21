@@ -60,10 +60,29 @@ export function hdrUploadIsRaw(): boolean {
   return rawUpload;
 }
 
-/** Transfer the shader should undo for this frame: none if the browser already converted HDR on upload. */
-export function shaderTransfer(colorSpace: { transfer?: string | null } | null | undefined): TransferCode {
-  const code = transferCode(colorSpace);
+/**
+ * Transfer the shader should undo for this frame. Safari doesn't always label decoded frames as HDR, so the
+ * track's own colour metadata (`fallback`, from the file's colr/VUI) is used when the frame says nothing.
+ * Returns 0 when the browser already converts HDR on upload.
+ */
+export function shaderTransfer(
+  colorSpace: { transfer?: string | null } | null | undefined,
+  fallback: TransferCode = 0,
+): TransferCode {
+  const code = transferCode(colorSpace) || fallback;
   return code !== 0 && hdrUploadIsRaw() ? code : 0;
+}
+
+type ColorTrack = {
+  getColorSpace(): Promise<{ transfer?: string | null }>;
+  hasHighDynamicRange(): Promise<boolean>;
+};
+
+/** HDR transfer declared by a video track's metadata; HDR of unknown kind is treated as HLG (iPhone default). */
+export async function trackTransfer(track: ColorTrack): Promise<TransferCode> {
+  const code = transferCode(await track.getColorSpace().catch(() => null));
+  if (code !== 0) return code;
+  return (await track.hasHighDynamicRange().catch(() => false)) ? 1 : 0;
 }
 
 /** Peak of HLG/PQ masters relative to SDR reference white: 1000 nits / 203 nits. */

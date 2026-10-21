@@ -3,7 +3,7 @@
 // reads. Which method is fastest depends on the device (GPU upload + readback vs CPU 2D vs bitmap resize), and the
 // difference is large (4K frames), so `AdaptiveScaler` benchmarks them on the first frames and keeps the fastest.
 import { VideoSample } from 'mediabunny';
-import { TONEMAP_GLSL, shaderTransfer } from './hdr';
+import { TONEMAP_GLSL, type TransferCode, shaderTransfer } from './hdr';
 
 export type ScalerKind = 'gl' | 'bitmap' | '2d';
 
@@ -12,6 +12,8 @@ export type FrameScaler = {
   readonly kind: ScalerKind;
   /** Draws `sample` (rotated by its own rotation) to fill the canvas. */
   draw(sample: VideoSample): void | Promise<void>;
+  /** HDR transfer from the track's metadata, used when frames aren't labelled (WebGL only). */
+  sourceTransfer?: TransferCode;
   dispose(): void;
 };
 
@@ -38,8 +40,8 @@ ${TONEMAP_GLSL}
 void main() { outColor = vec4(toSdr(texture(u_tex, v_uv).rgb, u_transfer), 1.0); }`;
 
 /** Does this frame need our tone mapping (HDR, and the browser doesn't convert it)? Only WebGL can do that. */
-export function isHdrSample(sample: VideoSample): boolean {
-  return shaderTransfer(sample.colorSpace) !== 0;
+export function isHdrSample(sample: VideoSample, trackTransfer: TransferCode = 0): boolean {
+  return shaderTransfer(sample.colorSpace, trackTransfer) !== 0;
 }
 
 /**
@@ -78,9 +80,10 @@ function createGL(canvas: OffscreenCanvas, fit: 'fill' | 'contain' = 'fill'): Fr
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.viewport(0, 0, canvas.width, canvas.height);
 
-  return {
+  const scaler: FrameScaler = {
     canvas,
     kind: 'gl',
+    sourceTransfer: 0,
     draw(sample) {
       const frame = sample.toVideoFrame();
       try {
@@ -89,7 +92,7 @@ function createGL(canvas: OffscreenCanvas, fit: 'fill' | 'contain' = 'fill'): Fr
         frame.close();
       }
       gl.uniform1i(uRot, Math.round(sample.rotation / 90) % 4);
-      gl.uniform1i(uTransfer, shaderTransfer(sample.colorSpace));
+      gl.uniform1i(uTransfer, shaderTransfer(sample.colorSpace, scaler.sourceTransfer));
       if (fit === 'contain') {
         // displayWidth/Height already account for rotation.
         const sw = sample.displayWidth;
@@ -110,6 +113,7 @@ function createGL(canvas: OffscreenCanvas, fit: 'fill' | 'contain' = 'fill'): Fr
       gl.deleteProgram(program);
     },
   };
+  return scaler;
 }
 
 /** Hardware-assisted resize via createImageBitmap, then a cheap rotate on the already-small bitmap. */
@@ -199,13 +203,21 @@ export class AdaptiveScaler {
   /** The scaler in use (the last one tried while still benchmarking). */
   current: FrameScaler | null = null;
 
+  /** HDR transfer from the source track's metadata (frames from Safari may be unlabelled). */
+  private trackTransfer: TransferCode = 0;
+
+  setSourceTransfer(code: TransferCode): void {
+    this.trackTransfer = code;
+    for (const c of this.candidates) c.sourceTransfer = code;
+  }
+
   get kind(): ScalerKind {
     return (this.chosen ?? this.current ?? (this.candidates[0] as FrameScaler)).kind;
   }
 
   async render(sample: VideoSample, timestamp: number, duration: number): Promise<VideoSample> {
     // HDR footage must be tone-mapped, which only WebGL does: skip the benchmark.
-    if (!this.chosen && isHdrSample(sample)) {
+    if (!this.chosen && isHdrSample(sample, this.trackTransfer)) {
       const gl = this.candidates.find((c) => c.kind === 'gl');
       if (gl) {
         this.chosen = gl;

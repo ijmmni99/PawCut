@@ -1,10 +1,10 @@
 // Draws decoded VideoFrames onto the single preview canvas. WebGL2 today (one textured quad, letterboxed to 9:16);
 // filters, layers and transitions will become extra shader passes here in later phases.
 // Falls back to 2D canvas when WebGL2 is unavailable.
-import { TONEMAP_GLSL, shaderTransfer } from '../../engine/media/hdr';
+import { TONEMAP_GLSL, type TransferCode, shaderTransfer } from '../../engine/media/hdr';
 
 /** A decoded frame plus the clockwise rotation (0/90/180/270) needed to display it upright. */
-export type FrameSource = { frame: VideoFrame; rotation: number };
+export type FrameSource = { frame: VideoFrame; rotation: number; /** HDR transfer from the track metadata. */ transfer?: TransferCode };
 
 export type Compositor = {
   resize(width: number, height: number): void;
@@ -98,7 +98,7 @@ function createGL(canvas: HTMLCanvasElement): Compositor | null {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source.frame);
       gl.uniform1i(uRot, Math.round(source.rotation / 90) % 4);
       // Originals are shown while their proxy is being built; iPhone HDR needs tone mapping to not look washed out.
-      gl.uniform1i(uTransfer, shaderTransfer(source.frame.colorSpace));
+      gl.uniform1i(uTransfer, shaderTransfer(source.frame.colorSpace, source.transfer));
       const size = displaySize(source);
       const r = containRect(size.w, size.h, canvas.width, canvas.height);
       // Pixel rect -> clip space (y up).

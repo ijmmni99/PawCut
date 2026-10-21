@@ -325,7 +325,8 @@ function importLine(a: Asset): string {
   if (a.status === 'error') return `${a.name} · FAILED: ${a.error ?? 'unknown error'}`;
   if (!p) return a.name;
   const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-  return `${a.name} · ${a.width}×${a.height} · ${fmtSec(a.durationSec)} → copy ${sec(p.copyMs)}, proxy ${sec(p.totalMs)} (decode ${sec(p.decodeMs)}, scale[${p.scaler}] ${sec(p.drawMs)}, encode ${sec(p.encodeMs)}, ${p.kept}/${p.frames} frames)${p.bench ? ` bench ${JSON.stringify(p.bench)}ms/frame` : ''}${p.failures?.length ? ` failed: ${p.failures.join('; ')}` : ''}`;
+  const color = a.color ? ` · ${a.color.hdr ? 'HDR' : 'SDR'} ${a.color.transfer ?? '?'}/${a.color.primaries ?? '?'}` : '';
+  return `${a.name} · ${a.width}×${a.height} · ${fmtSec(a.durationSec)}${color} → copy ${sec(p.copyMs)}, proxy ${sec(p.totalMs)} (decode ${sec(p.decodeMs)}, scale[${p.scaler}] ${sec(p.drawMs)}, encode ${sec(p.encodeMs)}, ${p.kept}/${p.frames} frames)${p.bench ? ` bench ${JSON.stringify(p.bench)}ms/frame` : ''}${p.failures?.length ? ` failed: ${p.failures.join('; ')}` : ''}`;
 }
 
 function buildReport(

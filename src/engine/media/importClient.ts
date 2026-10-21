@@ -33,8 +33,8 @@ async function handle(e: ImportEvent): Promise<void> {
       }
       break;
     case 'probed': {
-      const { durationSec, width, height, hasAudio, originalPath } = e.probe;
-      await patchAsset(e.assetId, { durationSec, width, height, hasAudio, originalPath });
+      const { durationSec, width, height, hasAudio, originalPath, color } = e.probe;
+      await patchAsset(e.assetId, { durationSec, width, height, hasAudio, originalPath, color });
       const asset = useAssets.getState().assets[e.assetId];
       const projectId = targets.get(e.assetId);
       if (asset && projectId) await appendAssetClip(projectId, asset);
