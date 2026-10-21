@@ -180,6 +180,7 @@ async function buildProxy(
       kept: perf.kept,
       scaler: scaler.kind,
       bench: scaler.benchmark(),
+      failures: scaler.failures,
     };
     console.info(`PROXY_PERF ${JSON.stringify(prepStats)}`);
     await output.finalize();

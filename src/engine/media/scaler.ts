@@ -216,8 +216,15 @@ export class AdaptiveScaler {
     const scaler = this.chosen ?? (this.candidates[this.trial % this.candidates.length] as FrameScaler);
     this.current = scaler;
     const started = performance.now();
-    await scaler.draw(sample);
-    const out = new VideoSample(scaler.canvas, { timestamp, duration });
+    let out: VideoSample;
+    try {
+      await scaler.draw(sample);
+      out = new VideoSample(scaler.canvas, { timestamp, duration });
+    } catch (err) {
+      // A method this browser doesn't support (e.g. createImageBitmap on VideoFrame): drop it and use another.
+      this.drop(scaler, err);
+      return this.render(sample, timestamp, duration);
+    }
     if (!this.chosen) {
       const list = this.timings.get(scaler) ?? [];
       list.push(performance.now() - started);
@@ -226,6 +233,22 @@ export class AdaptiveScaler {
       if (this.trial >= TRIAL_FRAMES * this.candidates.length) this.pick();
     }
     return out;
+  }
+
+  /** Methods that failed on this device, with why (shown in Diagnostics). */
+  readonly failures: string[] = [];
+
+  private drop(scaler: FrameScaler, err: unknown): void {
+    this.failures.push(`${scaler.kind}: ${err instanceof Error ? err.message : String(err)}`);
+    scaler.dispose();
+    this.candidates = this.candidates.filter((c) => c !== scaler);
+    this.timings.delete(scaler);
+    if (this.chosen === scaler) this.chosen = null;
+    if (this.candidates.length === 0) throw new Error(`Can't process video frames here (${this.failures.join('; ')})`);
+    if (this.candidates.length === 1) this.chosen = this.candidates[0] as FrameScaler;
+    // Restart the benchmark round-robin over what's left.
+    this.trial = 0;
+    for (const c of this.candidates) this.timings.delete(c);
   }
 
   private pick(): void {

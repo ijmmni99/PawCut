@@ -46,6 +46,8 @@ export type PrepStats = {
   scaler: 'gl' | 'bitmap' | '2d';
   /** Median ms per frame for each scaler tried. */
   bench?: Partial<Record<'gl' | 'bitmap' | '2d', number>>;
+  /** Scaling methods that failed on this device. */
+  failures?: string[];
 };
 
 export type Clip = {
