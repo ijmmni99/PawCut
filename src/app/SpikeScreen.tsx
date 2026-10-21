@@ -152,7 +152,8 @@ export function SpikeScreen() {
     running && phase.progress > 0.02 ? (phase.elapsedMs / phase.progress - phase.elapsedMs) / 1000 : null;
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+16px)]">
+    // The header must sit outside the scroll view: iOS 26 blurs anything inside it near the top edge.
+    <div className="flex h-full flex-col">
       <TopBar className="justify-between px-4">
         <h1 className="flex items-center text-xl font-extrabold tracking-tight">
           <button type="button" aria-label="Back" onClick={() => navigate({ name: 'projects' })} className="-ml-2 flex size-11 items-center justify-center">
@@ -166,109 +167,111 @@ export function SpikeScreen() {
           </span>
         )}
       </TopBar>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+16px)]">
 
-      <section className="rounded-2xl bg-zinc-900 p-4">
-        <p className="mb-3 text-sm text-zinc-400">
-          Pick a ~60s iPhone video. It will be re-encoded to 1080×1920 H.264 30fps + AAC 48kHz, then you can save or share it.
-        </p>
-        <input ref={fileInput} type="file" accept="video/*" className="hidden" onChange={onPick} />
-        <button
-          type="button"
-          disabled={running}
-          onClick={() => fileInput.current?.click()}
-          className="min-h-12 w-full rounded-xl bg-pink-500 text-base font-bold text-white active:scale-[0.98] disabled:opacity-40"
-        >
-          {running ? 'Exporting…' : 'Import video & export'}
-        </button>
-
-        {running && (
-          <div className="mt-4">
-            <div className="h-3 w-full overflow-hidden rounded-full bg-zinc-800">
-              <div className="h-full bg-pink-500 transition-[width]" style={{ width: `${(phase.progress * 100).toFixed(1)}%` }} />
-            </div>
-            <div className="mt-2 flex justify-between text-sm text-zinc-400">
-              <span>{(phase.progress * 100).toFixed(0)}% · {fmtSec(phase.elapsedMs / 1000)}</span>
-              <span>{eta !== null ? `ETA ${fmtSec(eta)}` : 'Starting…'}</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => handle.current?.cancel()}
-              className="mt-3 min-h-11 w-full rounded-xl bg-zinc-800 text-sm font-semibold"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-
-        {phase.kind === 'done' && (
-          <div className="mt-4 space-y-3">
-            <div className="grid grid-cols-3 gap-2 text-center text-sm">
-              <Stat label="Size" value={fmtMB(phase.file.size)} />
-              <Stat label="Duration" value={fmtSec(phase.durationSec)} />
-              <Stat label="Speed" value={`${(phase.elapsedMs / 1000 / phase.durationSec).toFixed(2)}× RT`} />
-            </div>
-            <button
-              type="button"
-              onClick={() => void share(phase.file)}
-              className="min-h-12 w-full rounded-xl bg-emerald-500 text-base font-bold text-black active:scale-[0.98]"
-            >
-              Save / Share (Photos, Files, TikTok)
-            </button>
-            <button type="button" onClick={() => download(phase.file)} className="min-h-11 w-full rounded-xl bg-zinc-800 text-sm font-semibold">
-              Download instead
-            </button>
-          </div>
-        )}
-
-        {phase.kind === 'error' && (
-          <div className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-300">
-            <p className="font-semibold">Export failed</p>
-            <p>{phase.message}</p>
-            {phase.discarded.map((d) => (
-              <p key={d} className="text-red-400">• {d}</p>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="flex items-center gap-3 rounded-2xl bg-zinc-900 p-4 text-sm">
-        <div className="min-w-0 flex-1">
-          <div className="font-bold">Version</div>
-          <div className="truncate text-zinc-400">{__APP_VERSION__}</div>
-          {updateState === 'found' && <div className="text-emerald-400">New version found — tap Update at the bottom.</div>}
-          {updateState === 'latest' && <div className="text-zinc-400">You're on the latest version.</div>}
-          {updateState === 'failed' && <div className="text-red-400">Couldn't check (offline?).</div>}
-        </div>
-        <button
-          type="button"
-          disabled={updateState === 'checking'}
-          onClick={() => void onCheckUpdate()}
-          className="min-h-11 shrink-0 rounded-lg bg-zinc-800 px-3 font-semibold disabled:opacity-50"
-        >
-          {updateState === 'checking' ? 'Checking…' : 'Check for updates'}
-        </button>
-      </section>
-
-      {imports.length > 0 && (
-        <section className="rounded-2xl bg-zinc-900 p-4 text-sm">
-          <h2 className="mb-2 font-bold">Recent imports</h2>
-          {imports.map((a) => (
-            <p key={a.id} className="py-1 text-zinc-300">
-              {importLine(a)}
-            </p>
-          ))}
-        </section>
-      )}
-
-      <section className="rounded-2xl bg-zinc-900 p-4">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="font-bold">Device report</h2>
-          <button type="button" onClick={() => void copyReport()} className="min-h-11 rounded-lg bg-zinc-800 px-3 text-sm font-semibold">
-            {copied ? 'Copied ✓' : 'Copy report'}
+        <section className="rounded-2xl bg-zinc-900 p-4">
+          <p className="mb-3 text-sm text-zinc-400">
+            Pick a ~60s iPhone video. It will be re-encoded to 1080×1920 H.264 30fps + AAC 48kHz, then you can save or share it.
+          </p>
+          <input ref={fileInput} type="file" accept="video/*" className="hidden" onChange={onPick} />
+          <button
+            type="button"
+            disabled={running}
+            onClick={() => fileInput.current?.click()}
+            className="min-h-12 w-full rounded-xl bg-pink-500 text-base font-bold text-white active:scale-[0.98] disabled:opacity-40"
+          >
+            {running ? 'Exporting…' : 'Import video & export'}
           </button>
-        </div>
-        {caps ? <CapsView caps={caps} /> : <p className="text-sm text-zinc-500">Probing…</p>}
-      </section>
+
+          {running && (
+            <div className="mt-4">
+              <div className="h-3 w-full overflow-hidden rounded-full bg-zinc-800">
+                <div className="h-full bg-pink-500 transition-[width]" style={{ width: `${(phase.progress * 100).toFixed(1)}%` }} />
+              </div>
+              <div className="mt-2 flex justify-between text-sm text-zinc-400">
+                <span>{(phase.progress * 100).toFixed(0)}% · {fmtSec(phase.elapsedMs / 1000)}</span>
+                <span>{eta !== null ? `ETA ${fmtSec(eta)}` : 'Starting…'}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => handle.current?.cancel()}
+                className="mt-3 min-h-11 w-full rounded-xl bg-zinc-800 text-sm font-semibold"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
+          {phase.kind === 'done' && (
+            <div className="mt-4 space-y-3">
+              <div className="grid grid-cols-3 gap-2 text-center text-sm">
+                <Stat label="Size" value={fmtMB(phase.file.size)} />
+                <Stat label="Duration" value={fmtSec(phase.durationSec)} />
+                <Stat label="Speed" value={`${(phase.elapsedMs / 1000 / phase.durationSec).toFixed(2)}× RT`} />
+              </div>
+              <button
+                type="button"
+                onClick={() => void share(phase.file)}
+                className="min-h-12 w-full rounded-xl bg-emerald-500 text-base font-bold text-black active:scale-[0.98]"
+              >
+                Save / Share (Photos, Files, TikTok)
+              </button>
+              <button type="button" onClick={() => download(phase.file)} className="min-h-11 w-full rounded-xl bg-zinc-800 text-sm font-semibold">
+                Download instead
+              </button>
+            </div>
+          )}
+
+          {phase.kind === 'error' && (
+            <div className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-300">
+              <p className="font-semibold">Export failed</p>
+              <p>{phase.message}</p>
+              {phase.discarded.map((d) => (
+                <p key={d} className="text-red-400">• {d}</p>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="flex items-center gap-3 rounded-2xl bg-zinc-900 p-4 text-sm">
+          <div className="min-w-0 flex-1">
+            <div className="font-bold">Version</div>
+            <div className="text-zinc-400">{__APP_VERSION__}</div>
+            {updateState === 'found' && <div className="text-emerald-400">New version found — tap Update at the bottom.</div>}
+            {updateState === 'latest' && <div className="text-zinc-400">You're on the latest version.</div>}
+            {updateState === 'failed' && <div className="text-red-400">Couldn't check (offline?).</div>}
+          </div>
+          <button
+            type="button"
+            disabled={updateState === 'checking'}
+            onClick={() => void onCheckUpdate()}
+            className="min-h-11 shrink-0 rounded-lg bg-zinc-800 px-3 font-semibold disabled:opacity-50"
+          >
+            {updateState === 'checking' ? 'Checking…' : 'Check for updates'}
+          </button>
+        </section>
+
+        {imports.length > 0 && (
+          <section className="rounded-2xl bg-zinc-900 p-4 text-sm">
+            <h2 className="mb-2 font-bold">Recent imports</h2>
+            {imports.map((a) => (
+              <p key={a.id} className="py-1 text-zinc-300">
+                {importLine(a)}
+              </p>
+            ))}
+          </section>
+        )}
+
+        <section className="rounded-2xl bg-zinc-900 p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="font-bold">Device report</h2>
+            <button type="button" onClick={() => void copyReport()} className="min-h-11 rounded-lg bg-zinc-800 px-3 text-sm font-semibold">
+              {copied ? 'Copied ✓' : 'Copy report'}
+            </button>
+          </div>
+          {caps ? <CapsView caps={caps} /> : <p className="text-sm text-zinc-500">Probing…</p>}
+        </section>
+      </div>
     </div>
   );
 }
