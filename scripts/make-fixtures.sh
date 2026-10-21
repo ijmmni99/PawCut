@@ -21,4 +21,9 @@ ffmpeg -v error -y \
   -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=60" \
   -filter_complex "[2]scale=600:-1[c];[0][1]overlay=enable='between(t,10,14)'[a];[a][c]overlay=x='-600+(t-40)*300':y=300:enable='between(t,40,44)'[v];[3]volume='if(between(t,10,14)+between(t,40,44),0.5,0)':eval=frame[au]" \
   -map "[v]" -map "[au]" -t 60 -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -b:v 1M -c:a libopus "$out/autocut.mp4"
+# HDR: 3s of flat 75% grey as a 10-bit HLG / BT.2020 signal (HLG reference white). Tone-mapped it should export
+# near white; shown raw it would stay mid-grey ("washed out").
+ffmpeg -v error -y -f lavfi -i "color=c=0xBFBFBF:size=360x640:rate=30:duration=3" -f lavfi -i "sine=frequency=500:sample_rate=48000:duration=3" \
+  -pix_fmt yuv420p10le -color_primaries bt2020 -color_trc arib-std-b67 -colorspace bt2020nc \
+  -c:v libvpx-vp9 -profile:v 2 -deadline realtime -cpu-used 8 -b:v 1M -c:a libopus "$out/hlg.mp4"
 echo "fixtures written to $out"

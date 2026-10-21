@@ -274,6 +274,7 @@ function CapsView({ caps }: { caps: Capabilities }) {
       <Flag label="Wake Lock" ok={caps.wakeLock} />
       <Flag label="WebGL2" ok={caps.webgl2} />
       <Flag label="WebGPU" ok={caps.webgpu} />
+      <Flag label="HDR tone-mapping by PawCut" ok={caps.hdrToneMapping} />
       <CodecList title="Video encode 1080×1920" list={caps.videoEncode} />
       <CodecList title="Video decode 4K" list={caps.videoDecode} />
       <CodecList title="Audio encode" list={caps.audioEncode} />
@@ -307,7 +308,7 @@ function buildReport(
       `UA: ${caps.userAgent}`,
       `Standalone PWA: ${yn(caps.standalone)} | COI: ${yn(caps.crossOriginIsolated)} | cores: ${caps.hardwareConcurrency} | deviceMemory: ${caps.deviceMemoryGB ?? 'n/a'}`,
       `WebCodecs VD/VE/AD/AE: ${yn(caps.webCodecs.videoDecoder)}/${yn(caps.webCodecs.videoEncoder)}/${yn(caps.webCodecs.audioDecoder)}/${yn(caps.webCodecs.audioEncoder)}`,
-      `OPFS: ${yn(caps.opfs)} | Share files: ${yn(caps.shareFiles)} | WakeLock: ${yn(caps.wakeLock)} | WebGL2: ${yn(caps.webgl2)} | WebGPU: ${yn(caps.webgpu)} | persist(): ${persisted ?? 'n/a'}`,
+      `OPFS: ${yn(caps.opfs)} | Share files: ${yn(caps.shareFiles)} | WakeLock: ${yn(caps.wakeLock)} | WebGL2: ${yn(caps.webgl2)} | WebGPU: ${yn(caps.webgpu)} | persist(): ${persisted ?? 'n/a'} | HDR tone-map: ${yn(caps.hdrToneMapping)}`,
       'Video encode:',
       codecs(caps.videoEncode),
       'Video decode:',

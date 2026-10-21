@@ -1,4 +1,5 @@
 // Feature detection for the media pipeline. Never throws: every probe degrades to `false`.
+import { hdrUploadIsRaw } from './media/hdr';
 
 export type CodecProbe = { label: string; codec: string; supported: boolean; hw?: boolean };
 
@@ -13,6 +14,8 @@ export type Capabilities = {
   audioDecode: CodecProbe[];
   webgl2: boolean;
   webgpu: boolean;
+  /** HDR video arrives raw in WebGL, so PawCut tone-maps it (false = the browser converts it itself). */
+  hdrToneMapping: boolean;
   opfs: boolean;
   wakeLock: boolean;
   shareFiles: boolean;
@@ -161,6 +164,7 @@ export async function detectCapabilities(): Promise<Capabilities> {
     audioEncode,
     audioDecode,
     webgl2: hasWebGL2(),
+    hdrToneMapping: hdrUploadIsRaw(),
     webgpu,
     opfs,
     wakeLock: 'wakeLock' in navigator,
