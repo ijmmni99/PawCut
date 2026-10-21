@@ -1,5 +1,15 @@
+import { useEffect } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
+import { parseHash } from '../app/router';
 import { watchForUpdates } from './updates';
+
+/** Updates found this soon after launch are applied straight away: nothing is being edited yet. */
+const AUTO_APPLY_WINDOW_MS = 20_000;
+
+/** Safe to reload without asking: just launched, or sitting on the projects list (no edit or export running). */
+function safeToApply(): boolean {
+  return performance.now() < AUTO_APPLY_WINDOW_MS || parseHash(location.hash).name === 'projects';
+}
 
 export function UpdatePrompt() {
   const {
@@ -10,6 +20,10 @@ export function UpdatePrompt() {
       if (reg) watchForUpdates(reg);
     },
   });
+
+  useEffect(() => {
+    if (needRefresh && safeToApply()) void updateServiceWorker(true);
+  }, [needRefresh, updateServiceWorker]);
 
   if (!needRefresh) return null;
 

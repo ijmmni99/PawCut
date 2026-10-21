@@ -68,7 +68,8 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - Phase 0 spike lives on as Diagnostics (`#/diagnostics`, gear icon on projects screen): build version
   (`__APP_VERSION__` = commit · build time), Check for updates, recent imports, device report.
 - **Updates** `src/pwa/updates.ts` — SW `update()` on every return to foreground + every 30 min (installed iOS apps
-  stay in memory for days); `UpdatePrompt` shows the Update bar when a new SW is waiting.
+  stay in memory for days). A waiting SW is applied automatically (reload) within 20s of launch or while on the
+  projects list; otherwise `UpdatePrompt` shows the Update bar so an edit/export is never interrupted.
 
 ## Decisions
 - **AAC fallback = `@mediabunny/aac-encoder`** (FFmpeg AAC in WASM, ~260 KB gz), lazy-loaded in the worker only when
