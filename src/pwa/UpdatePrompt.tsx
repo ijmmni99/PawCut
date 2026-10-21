@@ -1,10 +1,15 @@
 import { useRegisterSW } from 'virtual:pwa-register/react';
+import { watchForUpdates } from './updates';
 
 export function UpdatePrompt() {
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
-  } = useRegisterSW();
+  } = useRegisterSW({
+    onRegisteredSW(_url, reg) {
+      if (reg) watchForUpdates(reg);
+    },
+  });
 
   if (!needRefresh) return null;
 

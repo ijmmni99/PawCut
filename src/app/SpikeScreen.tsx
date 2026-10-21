@@ -8,6 +8,7 @@ import { db } from '../library/db';
 import { navigate } from './router';
 import { Icon } from './ui/Icon';
 import { TopBar } from './ui/TopBar';
+import { checkForUpdate } from '../pwa/updates';
 
 type Phase =
   | { kind: 'idle' }
@@ -37,6 +38,16 @@ export function SpikeScreen() {
   const [heap, setHeap] = useState<HeapSample>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [imports, setImports] = useState<Asset[]>([]);
+  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'found' | 'latest' | 'failed'>('idle');
+
+  const onCheckUpdate = async () => {
+    setUpdateState('checking');
+    try {
+      setUpdateState((await checkForUpdate()) ? 'found' : 'latest');
+    } catch {
+      setUpdateState('failed');
+    }
+  };
   const [copied, setCopied] = useState(false);
   const handle = useRef<ExportHandle | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -220,6 +231,24 @@ export function SpikeScreen() {
         )}
       </section>
 
+      <section className="flex items-center gap-3 rounded-2xl bg-zinc-900 p-4 text-sm">
+        <div className="min-w-0 flex-1">
+          <div className="font-bold">Version</div>
+          <div className="truncate text-zinc-400">{__APP_VERSION__}</div>
+          {updateState === 'found' && <div className="text-emerald-400">New version found — tap Update at the bottom.</div>}
+          {updateState === 'latest' && <div className="text-zinc-400">You're on the latest version.</div>}
+          {updateState === 'failed' && <div className="text-red-400">Couldn't check (offline?).</div>}
+        </div>
+        <button
+          type="button"
+          disabled={updateState === 'checking'}
+          onClick={() => void onCheckUpdate()}
+          className="min-h-11 shrink-0 rounded-lg bg-zinc-800 px-3 font-semibold disabled:opacity-50"
+        >
+          {updateState === 'checking' ? 'Checking…' : 'Check for updates'}
+        </button>
+      </section>
+
       {imports.length > 0 && (
         <section className="rounded-2xl bg-zinc-900 p-4 text-sm">
           <h2 className="mb-2 font-bold">Recent imports</h2>
@@ -308,7 +337,7 @@ function buildReport(
   persisted: boolean | null,
   imports: Asset[],
 ): string {
-  const lines: string[] = ['PawCut Phase 0 report', `Date: ${new Date().toISOString()}`];
+  const lines: string[] = ['PawCut device report', `Version: ${__APP_VERSION__}`, `Date: ${new Date().toISOString()}`];
   if (caps) {
     const yn = (b: boolean) => (b ? 'yes' : 'no');
     const codecs = (list: CodecProbe[]) =>

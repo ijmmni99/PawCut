@@ -65,7 +65,10 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   per thread with a synthetic 10-bit HLG frame whether the browser already converts HDR on WebGL upload
   (Chromium does, for 10-bit only) — then the shader passes through to avoid double conversion. Proxies are
   versioned (`PROXY_VERSION` = 2); older ones are rebuilt in the background on launch (only if the source is HDR).
-- Phase 0 spike lives on as Diagnostics (`#/diagnostics`, gear icon on projects screen).
+- Phase 0 spike lives on as Diagnostics (`#/diagnostics`, gear icon on projects screen): build version
+  (`__APP_VERSION__` = commit · build time), Check for updates, recent imports, device report.
+- **Updates** `src/pwa/updates.ts` — SW `update()` on every return to foreground + every 30 min (installed iOS apps
+  stay in memory for days); `UpdatePrompt` shows the Update bar when a new SW is waiting.
 
 ## Decisions
 - **AAC fallback = `@mediabunny/aac-encoder`** (FFmpeg AAC in WASM, ~260 KB gz), lazy-loaded in the worker only when
