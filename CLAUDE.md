@@ -101,5 +101,7 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - `navigator.share({ files })` needs a fresh user gesture — can't auto-share when export finishes; show a button.
 - `performance.memory` doesn't exist in Safari; memory must be observed via Xcode/Web Inspector or by crash behaviour.
 - iOS ignores manifest `orientation`; a CSS landscape guard covers portrait lock.
+- iOS 26 blurs page content near the top edge of home-screen apps. Screen headers use `TopBar` (fixed, opaque, touching
+  the top edge, with a spacer) so they're treated as the app bar and stay sharp.
 - Web Share into TikTok: share sheet → "Save Video" (Photos) is the reliable path; TikTok's share-extension
   acceptance of files varies by version.

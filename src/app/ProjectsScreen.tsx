@@ -15,6 +15,7 @@ import { navigate } from './router';
 import { formatDuration } from './share';
 import { Icon } from './ui/Icon';
 import { Sheet } from './ui/Sheet';
+import { TopBar } from './ui/TopBar';
 
 function timeAgo(ts: number): string {
   const s = Math.max(0, (Date.now() - ts) / 1000);
@@ -85,7 +86,7 @@ export function ProjectsScreen() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between px-4 pb-2 pt-[calc(env(safe-area-inset-top)+12px)]">
+      <TopBar className="justify-between px-4">
         <h1 className="text-2xl font-extrabold tracking-tight">🐾 PawCut</h1>
         <button
           type="button"
@@ -95,7 +96,7 @@ export function ProjectsScreen() {
         >
           <Icon name="gear" size={22} />
         </button>
-      </header>
+      </TopBar>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-32">
         {projects && projects.length === 0 && (

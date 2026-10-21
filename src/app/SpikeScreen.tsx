@@ -7,6 +7,7 @@ import { holdWakeLock } from '../engine/wakeLock';
 import { db } from '../library/db';
 import { navigate } from './router';
 import { Icon } from './ui/Icon';
+import { TopBar } from './ui/TopBar';
 
 type Phase =
   | { kind: 'idle' }
@@ -140,8 +141,8 @@ export function SpikeScreen() {
     running && phase.progress > 0.02 ? (phase.elapsedMs / phase.progress - phase.elapsedMs) / 1000 : null;
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-[calc(env(safe-area-inset-top)+12px)]">
-      <header className="flex items-center justify-between">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+16px)]">
+      <TopBar className="justify-between px-4">
         <h1 className="flex items-center text-xl font-extrabold tracking-tight">
           <button type="button" aria-label="Back" onClick={() => navigate({ name: 'projects' })} className="-ml-2 flex size-11 items-center justify-center">
             <Icon name="back" />
@@ -153,7 +154,7 @@ export function SpikeScreen() {
             {caps.standalone ? 'Installed PWA' : 'Browser tab'}
           </span>
         )}
-      </header>
+      </TopBar>
 
       <section className="rounded-2xl bg-zinc-900 p-4">
         <p className="mb-3 text-sm text-zinc-400">

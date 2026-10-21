@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { navigate } from '../app/router';
 import { formatDuration } from '../app/share';
 import { Icon, type IconName } from '../app/ui/Icon';
+import { TopBar } from '../app/ui/TopBar';
 import { importFiles, retryImport } from '../engine/media/importClient';
 import { closeProject, openProject, renameProject } from '../library/projects';
 import { ExportSheet } from './ExportSheet';
@@ -267,7 +268,7 @@ export function EditorScreen({ projectId }: { projectId: string }) {
 
   return (
     <div ref={rootRef} className="flex h-full flex-col bg-[var(--bg)]">
-      <header className="flex items-center gap-1 px-2 pt-[env(safe-area-inset-top)]">
+      <TopBar className="gap-1 px-2">
         <button type="button" aria-label="Back" onClick={() => void back()} className="flex size-11 items-center justify-center">
           <Icon name="back" />
         </button>
@@ -297,7 +298,7 @@ export function EditorScreen({ projectId }: { projectId: string }) {
         >
           Export
         </button>
-      </header>
+      </TopBar>
 
       <div ref={stageRef} className="relative flex min-h-0 flex-[1_1_45%] items-center justify-center px-3 py-2">
         <canvas
