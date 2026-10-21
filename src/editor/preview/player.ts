@@ -25,7 +25,7 @@ const ACK_EVERY_MS = 200;
 type State = 'paused' | 'starting' | 'playing';
 
 /** Playback smoothness counters (read by e2e tests; reset on every play). */
-export const previewStats = { shown: 0, dropped: 0, maxGapMs: 0, maxGapAt: 0, lastShowAt: 0 };
+export const previewStats = { shown: 0, dropped: 0, maxGapMs: 0, maxGapAt: 0, lastShowAt: 0, lastError: '' };
 
 type AudioSessionNavigator = Navigator & { audioSession?: { type: string } };
 
@@ -264,6 +264,11 @@ export class PreviewPlayer {
       case 'end':
         if (e.gen === this.gen) this.streamEnded = true;
         return;
+      case 'error':
+        if (e.gen !== this.gen) return;
+        previewStats.lastError = e.message;
+        this.pause();
+        return;
     }
   }
 
@@ -276,6 +281,11 @@ export class PreviewPlayer {
       const framesReady =
         this.queue.length >= START_FRAMES || (this.queue.length > 0 && (this.streamEnded || waited > START_MAX_WAIT_MS));
       if (framesReady && (this.gotAudio || waited > AUDIO_GRACE_MS)) this.beginClock();
+      else if (this.streamEnded && this.queue.length === 0) {
+        // Nothing decodable from here: stop instead of sitting in "playing" forever.
+        this.pause();
+        return;
+      }
       this.raf = requestAnimationFrame(this.tick);
       return;
     }

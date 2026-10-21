@@ -14,4 +14,5 @@ export type PreviewEvent =
   | { type: 'frame'; gen: number; t: number; frame: VideoFrame; rotation: number }
   | { type: 'audio'; gen: number; t: number; speed: number; sampleRate: number; channels: Float32Array[] }
   | { type: 'end'; gen: number }
+  | { type: 'error'; gen: number; message: string }
   | { type: 'still'; id: number; frame: VideoFrame | null; rotation: number };

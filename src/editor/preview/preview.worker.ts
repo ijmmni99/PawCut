@@ -293,7 +293,10 @@ self.onmessage = (e: MessageEvent<PreviewRequest>) => {
       inFlight = 0;
       clock = msg.from;
       nudge();
-      void streamVideo(msg.gen, msg.from).catch((err: unknown) => console.warn('preview video', err));
+      void streamVideo(msg.gen, msg.from).catch((err: unknown) => {
+        console.warn('preview video', err);
+        post({ type: 'error', gen: msg.gen, message: err instanceof Error ? err.message : String(err) });
+      });
       void streamAudio(msg.gen, msg.from).catch((err: unknown) => console.warn('preview audio', err));
       break;
     case 'stop':
