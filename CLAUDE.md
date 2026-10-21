@@ -58,6 +58,13 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   / Cut silences. Apply replaces the main track in one undo step.
 - MediaPipe runtime is copied from node_modules to `public/mediapipe/` by `scripts/copy-mediapipe.mjs` (pre-dev /
   pre-build, gitignored); model committed in `public/models/`. Both runtime-cached by the SW, not precached.
+- **HDR** `src/engine/media/hdr.ts` — iPhone HLG/PQ BT.2020 → SDR BT.709 in GLSL (`TONEMAP_GLSL`, mirrored in TS for
+  tests): decode transfer → linear (203 nits = 1.0) → BT.2020→709 → soft knee at 0.75 → sRGB. Used by the preview
+  compositor (originals shown before the proxy exists), the proxy scaler (forces the WebGL scaler for HDR) and
+  export (HDR clips render through a WebGL contain-scaler instead of CanvasSink). `hdrUploadIsRaw()` probes once
+  per thread with a synthetic 10-bit HLG frame whether the browser already converts HDR on WebGL upload
+  (Chromium does, for 10-bit only) — then the shader passes through to avoid double conversion. Proxies are
+  versioned (`PROXY_VERSION` = 2); older ones are rebuilt in the background on launch (only if the source is HDR).
 - Phase 0 spike lives on as Diagnostics (`#/diagnostics`, gear icon on projects screen).
 
 ## Decisions
@@ -87,8 +94,10 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - AudioContext must be created/resumed inside a user gesture (the Play tap) or it stays suspended.
 - Worker + WebCodecs are suspended when the PWA is backgrounded. Wake lock prevents dimming, but switching apps
   pauses export. Must warn the user to keep PawCut open.
-- iPhone footage is usually HEVC, often 10-bit HDR (HLG / Dolby Vision). Re-encoding to 8-bit H.264 SDR without
-  tone-mapping may look washed out. Needs a WebGL tone-map pass in Phase 1 if Phase 0 shows it.
+- iPhone footage is usually HEVC 10-bit HDR (HLG + Dolby Vision metadata). Safari uploads it to WebGL raw → washed
+  out unless tone-mapped (see HDR above). Diagnostics shows "HDR tone-mapping by PawCut" = the probe result.
+- The iOS photo picker converts HEVC to H.264 for web pages by default ("Most Compatible") — very slow for long
+  clips. Picker ••• → format "Current" hands over the original instantly; PawCut handles HEVC fine.
 - `navigator.share({ files })` needs a fresh user gesture — can't auto-share when export finishes; show a button.
 - `performance.memory` doesn't exist in Safari; memory must be observed via Xcode/Web Inspector or by crash behaviour.
 - iOS ignores manifest `orientation`; a CSS landscape guard covers portrait lock.
