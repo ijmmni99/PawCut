@@ -1,6 +1,7 @@
 // Draws decoded VideoFrames onto the single preview canvas. WebGL2 today (one textured quad, letterboxed to 9:16);
 // filters, layers and transitions will become extra shader passes here in later phases.
 // Falls back to 2D canvas when WebGL2 is unavailable.
+import { TONEMAP_GLSL, shaderTransfer } from '../../engine/media/hdr';
 
 /** A decoded frame plus the clockwise rotation (0/90/180/270) needed to display it upright. */
 export type FrameSource = { frame: VideoFrame; rotation: number };
@@ -32,11 +33,13 @@ void main() {
 }`;
 
 const FS = `#version 300 es
-precision mediump float;
+precision highp float;
 in vec2 v_uv;
 uniform sampler2D u_tex;
+uniform int u_transfer;
 out vec4 outColor;
-void main() { outColor = texture(u_tex, v_uv); }`;
+${TONEMAP_GLSL}
+void main() { outColor = vec4(toSdr(texture(u_tex, v_uv).rgb, u_transfer), 1.0); }`;
 
 /** Letterboxed destination rect for a source of size sw×sh inside dw×dh. */
 export function containRect(sw: number, sh: number, dw: number, dh: number): { x: number; y: number; w: number; h: number } {
@@ -73,6 +76,7 @@ function createGL(canvas: HTMLCanvasElement): Compositor | null {
   gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   const uRect = gl.getUniformLocation(program, 'u_rect');
   const uRot = gl.getUniformLocation(program, 'u_rot');
+  const uTransfer = gl.getUniformLocation(program, 'u_transfer');
 
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -93,6 +97,8 @@ function createGL(canvas: HTMLCanvasElement): Compositor | null {
       if (!source) return;
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source.frame);
       gl.uniform1i(uRot, Math.round(source.rotation / 90) % 4);
+      // Originals are shown while their proxy is being built; iPhone HDR needs tone mapping to not look washed out.
+      gl.uniform1i(uTransfer, shaderTransfer(source.frame.colorSpace));
       const size = displaySize(source);
       const r = containRect(size.w, size.h, canvas.width, canvas.height);
       // Pixel rect -> clip space (y up).

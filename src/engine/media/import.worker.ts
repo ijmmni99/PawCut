@@ -20,7 +20,7 @@ import type { CodecProfile } from '../codecProfile';
 import { assetDir, readFile } from '../storage/opfs';
 import { copyBlobToOpfs, createOpfsTarget, writeBlobToOpfs } from '../storage/opfsWriter';
 import { AdaptiveScaler } from './scaler';
-import type { ImportEvent, ImportRequest, ProbeResult, ProxyResult } from './protocol';
+import { PROXY_VERSION, type ImportEvent, ImportRequest, ProbeResult, ProxyResult } from './protocol';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -90,7 +90,8 @@ async function buildProxy(
   const scaler = new AdaptiveScaler(width, height);
   let prepStats: PrepStats | null = null;
 
-  const proxyPath = `${dir}/proxy.mp4`;
+  // Versioned names: an upgrade writes new files while the old proxy may still be playing.
+  const proxyPath = `${dir}/proxy-v${PROXY_VERSION}.mp4`;
   const sink = await createOpfsTarget(proxyPath);
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target: sink.target });
   const videoSource = new VideoSampleSource({
@@ -190,9 +191,9 @@ async function buildProxy(
     scaler.dispose();
   }
 
-  const posterPath = posterDrawn ? `${dir}/poster.jpg` : null;
+  const posterPath = posterDrawn ? `${dir}/poster-v${PROXY_VERSION}.jpg` : null;
   if (posterPath) await writeBlobToOpfs(await poster.convertToBlob({ type: 'image/jpeg', quality: 0.8 }), posterPath);
-  const thumbsPath = nextThumb > 0 ? `${dir}/thumbs.jpg` : null;
+  const thumbsPath = nextThumb > 0 ? `${dir}/thumbs-v${PROXY_VERSION}.jpg` : null;
   if (thumbsPath) await writeBlobToOpfs(await sprite.convertToBlob({ type: 'image/jpeg', quality: 0.7 }), thumbsPath);
 
   return {
@@ -238,7 +239,7 @@ async function copyAndProbe(job: ImportRequest): Promise<Probed | null> {
     const copyMs = performance.now() - copyStarted;
     input = new Input({ source: new BlobSource(await readFile(originalPath)), formats: ALL_FORMATS });
     const info = await probe(input, originalPath);
-    post({ type: 'probed', assetId, probe: info });
+    if (!job.upgrade) post({ type: 'probed', assetId, probe: info });
     return { job, input, info, copyMs };
   } catch (err) {
     input?.dispose();
@@ -251,11 +252,15 @@ async function copyAndProbe(job: ImportRequest): Promise<Probed | null> {
 async function prepare({ job, input, info, copyMs }: Probed): Promise<void> {
   const progress = progressReporter(job.assetId);
   try {
+    if (job.upgrade && !(await (await input.getPrimaryVideoTrack())?.hasHighDynamicRange())) {
+      post({ type: 'unchanged', assetId: job.assetId });
+      return;
+    }
     const proxy = await buildProxy(job.assetId, input, info, job.profile, (p) =>
       progress(COPY_WEIGHT + p * (1 - COPY_WEIGHT)),
     );
     proxy.prepStats.copyMs = Math.round(copyMs);
-    post({ type: 'ready', assetId: job.assetId, proxy });
+    post({ type: 'ready', assetId: job.assetId, proxy, upgrade: job.upgrade === true });
   } catch (err) {
     post({ type: 'error', assetId: job.assetId, message: errorMessage(err), probed: true });
   } finally {

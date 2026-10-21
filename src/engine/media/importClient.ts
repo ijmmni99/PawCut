@@ -6,7 +6,8 @@ import { newId } from '../../editor/timeline/model';
 import { db } from '../../library/db';
 import { appendAssetClip } from '../../library/projects';
 import { codecProfile } from '../codecProfile';
-import type { ImportEvent, ImportRequest } from './protocol';
+import { removeEntry } from '../storage/opfs';
+import { PROXY_VERSION, type ImportEvent, type ImportRequest } from './protocol';
 
 let worker: Worker | null = null;
 const targets = new Map<string, string>(); // assetId -> projectId
@@ -26,8 +27,10 @@ async function patchAsset(id: string, patch: Partial<Asset>): Promise<void> {
 async function handle(e: ImportEvent): Promise<void> {
   switch (e.type) {
     case 'progress':
-      // Progress is UI-only; not worth an IndexedDB write per tick.
-      useAssets.getState().patch(e.assetId, { progress: e.progress });
+      // Progress is UI-only; not worth an IndexedDB write per tick. Background upgrades of ready assets stay silent.
+      if (useAssets.getState().assets[e.assetId]?.status === 'importing') {
+        useAssets.getState().patch(e.assetId, { progress: e.progress });
+      }
       break;
     case 'probed': {
       const { durationSec, width, height, hasAudio, originalPath } = e.probe;
@@ -37,12 +40,26 @@ async function handle(e: ImportEvent): Promise<void> {
       if (asset && projectId) await appendAssetClip(projectId, asset);
       break;
     }
-    case 'ready':
+    case 'ready': {
       targets.delete(e.assetId);
-      await patchAsset(e.assetId, { ...e.proxy, status: 'ready', progress: 1 });
+      const old = useAssets.getState().assets[e.assetId];
+      await patchAsset(e.assetId, { ...e.proxy, status: 'ready', progress: 1, proxyVersion: PROXY_VERSION });
+      if (e.upgrade && old) {
+        // Drop the superseded files and the Auto-Cut analysis made from them.
+        for (const path of [old.proxyPath, old.posterPath, old.thumbsPath]) {
+          if (path && !Object.values(e.proxy).includes(path)) await removeEntry(path);
+        }
+        await db.analyses.delete(e.assetId);
+      }
+      break;
+    }
+    case 'unchanged':
+      await patchAsset(e.assetId, { proxyVersion: PROXY_VERSION, progress: 1 });
       break;
     case 'error':
       targets.delete(e.assetId);
+      // A failed background upgrade keeps the old (usable) proxy.
+      if (useAssets.getState().assets[e.assetId]?.status === 'ready') break;
       await patchAsset(e.assetId, { status: 'error', error: e.message });
       break;
   }
@@ -97,6 +114,23 @@ export async function resumeInterruptedImports(): Promise<void> {
       assetId: a.id,
       source: { opfsPath: a.originalPath },
       profile: codecProfile,
+    };
+    getWorker().postMessage(request);
+  }
+}
+
+/** Rebuilds proxies made before the current PROXY_VERSION (only HDR sources actually change), in the background. */
+export async function upgradeOldProxies(): Promise<void> {
+  const old = (await db.assets.toArray()).filter(
+    (a) => a.status === 'ready' && a.originalPath && (a.proxyVersion ?? 1) < PROXY_VERSION,
+  );
+  for (const a of old) {
+    const request: ImportRequest = {
+      type: 'import',
+      assetId: a.id,
+      source: { opfsPath: a.originalPath as string },
+      profile: codecProfile,
+      upgrade: true,
     };
     getWorker().postMessage(request);
   }

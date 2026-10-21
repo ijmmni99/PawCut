@@ -12,12 +12,15 @@ import {
   CanvasSource,
   Input,
   type InputAudioTrack,
+  type InputVideoTrack,
   Mp4OutputFormat,
   Output,
   Quality,
+  VideoSampleSink,
 } from 'mediabunny';
 import { type Asset, type Clip, type Project, clipDuration } from '../../editor/timeline/model';
 import { type Pcm, applyEdgeFades, renderSpeedResampled } from '../audio/resample';
+import { type FrameScaler, createContainScaler } from '../media/scaler';
 import { readFile } from '../storage/opfs';
 import { createOpfsTarget } from '../storage/opfsWriter';
 import { EXPORT_PATH, type ExportPreset, type RenderEvent, type RenderRequest } from './protocol';
@@ -109,6 +112,45 @@ async function addClipAudio(
   }
 }
 
+let hdrScaler: FrameScaler | null | undefined;
+
+/**
+ * Letterboxed frames of one clip at the given source times. SDR goes through CanvasSink; HDR (iPhone HLG/PQ)
+ * goes through the WebGL scaler, which tone-maps so the export isn't washed out.
+ */
+async function clipFrames(
+  track: InputVideoTrack,
+  width: number,
+  height: number,
+  times: Iterable<number>,
+): Promise<AsyncIterable<CanvasImageSource | null>> {
+  if (await track.hasHighDynamicRange()) {
+    hdrScaler ??= createContainScaler(width, height);
+    const scaler = hdrScaler;
+    if (scaler) {
+      const samples = new VideoSampleSink(track).samplesAtTimestamps(times);
+      return (async function* () {
+        for await (const sample of samples) {
+          if (!sample) {
+            yield null;
+            continue;
+          }
+          try {
+            await scaler.draw(sample);
+          } finally {
+            sample.close();
+          }
+          yield scaler.canvas;
+        }
+      })();
+    }
+  }
+  const sink = new CanvasSink(track, { width, height, fit: 'contain', poolSize: 2 });
+  return (async function* () {
+    for await (const wrapped of sink.canvasesAtTimestamps(times)) yield wrapped?.canvas ?? null;
+  })();
+}
+
 async function render(project: Project, assets: Record<string, Asset>, preset: ExportPreset): Promise<void> {
   const started = performance.now();
   const { width, height, frameRate: fps, sampleRate: rate } = preset;
@@ -162,19 +204,19 @@ async function render(project: Project, assets: Record<string, Asset>, preset: E
       // Audio for the clip goes in first; it's small once encoded and keeps the muxer interleaving simple.
       await addClipAudio(audio, audioTrack, clip, firstSample, sampleCount, rate);
 
-      const frames = new CanvasSink(videoTrack, { width, height, fit: 'contain', poolSize: 2 });
       // Sample mid-frame so rounding never lands just before the intended source frame.
       const times = function* () {
         for (let k = 0; k < frameCount; k++) yield clip.inSec + ((k + 0.5) / fps) * clip.speed;
       };
+      const frames = await clipFrames(videoTrack, width, height, times());
       let k = 0;
-      for await (const wrapped of frames.canvasesAtTimestamps(times())) {
+      for await (const image of frames) {
         checkCanceled();
         // Before the first decodable frame we repeat whatever is on the canvas (black at the very start).
-        if (wrapped) {
+        if (image) {
           ctx.fillStyle = '#000';
           ctx.fillRect(0, 0, width, height);
-          ctx.drawImage(wrapped.canvas, 0, 0, width, height);
+          ctx.drawImage(image, 0, 0, width, height);
         }
         await video.add((firstFrame + k) / fps, 1 / fps);
         k++;

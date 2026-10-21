@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { EditorScreen } from '../editor/EditorScreen';
-import { resumeInterruptedImports } from '../engine/media/importClient';
+import { resumeInterruptedImports, upgradeOldProxies } from '../engine/media/importClient';
 import { getSetting } from '../library/db';
 import { LAST_PROJECT_KEY, loadAssets, startAutosave } from '../library/projects';
 import { UpdatePrompt } from '../pwa/UpdatePrompt';
@@ -12,7 +12,7 @@ const SpikeScreen = lazy(() => import('./SpikeScreen').then((m) => ({ default: m
 async function boot(): Promise<void> {
   void navigator.storage?.persist?.().catch(() => false);
   await loadAssets();
-  void resumeInterruptedImports();
+  void resumeInterruptedImports().then(upgradeOldProxies);
   // Relaunch after the app was killed: go straight back into the project that was open.
   if (parseHash(location.hash).name === 'projects') {
     const last = await getSetting<string | null>(LAST_PROJECT_KEY);

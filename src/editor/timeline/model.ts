@@ -27,6 +27,8 @@ export type Asset = {
   thumbColumns: number;
   thumbSize: number;
   createdAt: number;
+  /** Proxy generation the files were built with (see PROXY_VERSION). Missing = 1. */
+  proxyVersion?: number;
   /** How long preparing the proxy took, per stage (shown in Diagnostics to tune import speed). */
   prepStats?: PrepStats | null;
 };
