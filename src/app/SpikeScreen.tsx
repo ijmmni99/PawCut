@@ -44,7 +44,14 @@ export function SpikeScreen() {
     void detectCapabilities().then(setCaps);
     void db.assets
       .toArray()
-      .then((list) => setImports(list.filter((a) => a.prepStats).sort((a, b) => b.createdAt - a.createdAt).slice(0, 5)));
+      .then((list) =>
+        setImports(
+          list
+            .filter((a) => a.prepStats || a.status === 'error')
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(0, 6),
+        ),
+      );
     void navigator.storage?.persist?.().then(setPersisted, () => setPersisted(false));
   }, []);
 
@@ -285,9 +292,10 @@ function CapsView({ caps }: { caps: Capabilities }) {
 
 function importLine(a: Asset): string {
   const p = a.prepStats;
+  if (a.status === 'error') return `${a.name} · FAILED: ${a.error ?? 'unknown error'}`;
   if (!p) return a.name;
   const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-  return `${a.name} · ${a.width}×${a.height} · ${fmtSec(a.durationSec)} → copy ${sec(p.copyMs)}, proxy ${sec(p.totalMs)} (decode ${sec(p.decodeMs)}, scale[${p.scaler}] ${sec(p.drawMs)}, encode ${sec(p.encodeMs)}, ${p.kept}/${p.frames} frames)${p.bench ? ` bench ${JSON.stringify(p.bench)}ms/frame` : ''}`;
+  return `${a.name} · ${a.width}×${a.height} · ${fmtSec(a.durationSec)} → copy ${sec(p.copyMs)}, proxy ${sec(p.totalMs)} (decode ${sec(p.decodeMs)}, scale[${p.scaler}] ${sec(p.drawMs)}, encode ${sec(p.encodeMs)}, ${p.kept}/${p.frames} frames)${p.bench ? ` bench ${JSON.stringify(p.bench)}ms/frame` : ''}${p.failures?.length ? ` failed: ${p.failures.join('; ')}` : ''}`;
 }
 
 function buildReport(

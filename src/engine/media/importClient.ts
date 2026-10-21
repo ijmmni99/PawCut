@@ -135,3 +135,17 @@ export async function upgradeOldProxies(): Promise<void> {
     getWorker().postMessage(request);
   }
 }
+
+/** Re-runs preparation for an asset whose import failed, from the original already copied into OPFS. */
+export async function retryImport(assetId: string): Promise<void> {
+  const asset = useAssets.getState().assets[assetId];
+  if (!asset?.originalPath) return;
+  await patchAsset(assetId, { status: 'importing', progress: 0, error: null });
+  const request: ImportRequest = {
+    type: 'import',
+    assetId,
+    source: { opfsPath: asset.originalPath },
+    profile: codecProfile,
+  };
+  getWorker().postMessage(request);
+}

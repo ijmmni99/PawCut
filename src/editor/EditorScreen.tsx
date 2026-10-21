@@ -2,11 +2,11 @@ import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { navigate } from '../app/router';
 import { formatDuration } from '../app/share';
 import { Icon, type IconName } from '../app/ui/Icon';
-import { importFiles } from '../engine/media/importClient';
+import { importFiles, retryImport } from '../engine/media/importClient';
 import { closeProject, openProject, renameProject } from '../library/projects';
 import { ExportSheet } from './ExportSheet';
 import { PreviewPlayer } from './preview/player';
-import { useEditor, usePlayback } from './store';
+import { useAssets, useEditor, usePlayback } from './store';
 import { TimelineView } from './timeline/TimelineView';
 import { duplicateClip, locate, projectDuration, removeClips, splitAt } from './timeline/model';
 import { SpeedSheet } from './tools/SpeedSheet';
@@ -54,6 +54,39 @@ function ToolButton({
       <Icon name={icon} size={22} />
       {label}
     </button>
+  );
+}
+
+/** Explains a clip whose preparation failed (selected clip, else the one under the playhead) and offers a retry. */
+function ClipIssueBar() {
+  const assetId = useEditor((s) => {
+    const p = s.project;
+    if (!p) return null;
+    const id = s.selection[0];
+    const clip = id ? p.main.find((c) => c.id === id) : undefined;
+    return clip?.assetId ?? null;
+  });
+  const time = usePlayback((s) => Math.floor(s.time));
+  const fallbackId = useEditor((s) => (s.project ? (locate(s.project, time)?.clip.assetId ?? null) : null));
+  const asset = useAssets((s) => s.assets[assetId ?? fallbackId ?? '']);
+  if (asset?.status !== 'error') return null;
+  return (
+    <div className="mx-2 mb-1 flex items-center gap-2 rounded-xl bg-red-950/80 px-3 py-2 text-xs text-red-200">
+      <span className="min-w-0 flex-1">
+        <b>Couldn't prepare “{asset.name}”.</b> <span className="text-red-300/80">{asset.error}</span>
+      </span>
+      {asset.originalPath ? (
+        <button
+          type="button"
+          onClick={() => void retryImport(asset.id)}
+          className="min-h-9 shrink-0 rounded-lg bg-red-200 px-3 font-bold text-red-950"
+        >
+          Retry
+        </button>
+      ) : (
+        <span className="shrink-0 text-red-300">Delete & import again</span>
+      )}
+    </div>
   );
 }
 
@@ -306,6 +339,7 @@ export function EditorScreen({ projectId }: { projectId: string }) {
         onPeekEnd={() => playerRef.current?.showTime(usePlayback.getState().time)}
       />
 
+      <ClipIssueBar />
       <nav className="flex gap-1 overflow-x-auto border-t border-zinc-800 px-2 pb-[calc(env(safe-area-inset-bottom)+4px)] pt-1">
         <ToolButton icon="plus" label="Add" onClick={() => fileInput.current?.click()} />
         <ToolButton

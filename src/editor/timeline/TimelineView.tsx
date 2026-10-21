@@ -452,7 +452,7 @@ class TimelineController {
       } else if (asset?.status === 'error') {
         ctx.fillStyle = 'rgba(127,29,29,0.6)';
         ctx.fillRect(x, TRACK_Y, wInner, TRACK_H);
-        this.label('⚠︎ preview may lag', x + 6, TRACK_Y + 6);
+        this.label('⚠︎ not prepared · tap for details', x + 6, TRACK_Y + 6);
       }
       if (clip.speed !== 1) this.label(`${+clip.speed.toFixed(2)}×`, x + 6, TRACK_Y + TRACK_H - 22);
       ctx.restore();
