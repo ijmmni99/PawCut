@@ -70,6 +70,8 @@ type Voice = {
   /** Exponential pitch glide to `freqEnd` over `glide` seconds. */
   freqEnd?: number;
   glide?: number;
+  /** Pitch wobble: rate Hz, depth cents, fading in over the first 0.15 s. */
+  vibrato?: { rate: number; cents: number };
   oscs: Osc[];
   env: Env;
   filter?: Filter;
@@ -198,6 +200,10 @@ export class Studio {
       v.freqEnd && v.glide ? Math.exp(Math.log(v.freqEnd / v.freq) / (v.glide * sr)) : 1;
     const glideEnd = v.glide ? Math.round(v.glide * sr) : 0;
     let freq = v.freq;
+    const vib = v.vibrato;
+    const vibW = vib ? (2 * Math.PI * vib.rate) / sr : 0;
+    const vibDepth = vib ? vib.cents / 1200 : 0;
+    const vibFadeN = Math.round(0.15 * sr);
 
     // Envelope.
     const aN = Math.max(1, Math.round(env.a * sr));
@@ -234,7 +240,8 @@ export class Studio {
         let s: number;
         if (o.wave === 'noise') s = this.noise();
         else {
-          const dt = (freq * o.mult) / sr;
+          const f0 = vib ? freq * 2 ** (vibDepth * Math.min(1, n / vibFadeN) * Math.sin(vibW * n)) : freq;
+          const dt = (f0 * o.mult) / sr;
           o.phase += dt;
           if (o.phase >= 1) o.phase -= 1;
           const p = o.phase;
@@ -528,6 +535,93 @@ export class Studio {
       env: { a: 0.03, d: 0.1, s: 0.9, hold: len - 0.05, r: 0.05 },
       level,
       send: 0.3,
+    });
+  }
+
+  marimba(b: number, midi: number, level = 0.25, pan = 0): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi),
+      oscs: [
+        { wave: 'sine', amp: 1 },
+        { wave: 'sine', amp: 0.35, ratio: 4, decay: 0.08 },
+        { wave: 'sine', amp: 0.12, ratio: 10, decay: 0.03 },
+      ],
+      env: { a: 0.002, d: 0.55, s: 0 },
+      level,
+      pan,
+      send: 0.25,
+    });
+  }
+
+  whistle(b: number, midi: number, beats: number, level = 0.12, pan = 0.1): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi),
+      vibrato: { rate: 5.5, cents: 18 },
+      oscs: [
+        { wave: 'sine', amp: 1 },
+        { wave: 'tri', amp: 0.12, ratio: 2 },
+        { wave: 'noise', amp: 0.02 },
+      ],
+      env: { a: 0.04, d: 0.3, s: 0.8, hold: this.t(beats) * 0.9, r: 0.08 },
+      filter: { type: 'lp', from: 5000 },
+      level,
+      pan,
+      send: 0.35,
+    });
+  }
+
+  glock(b: number, midi: number, level = 0.12, pan = 0.15): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi),
+      oscs: [
+        { wave: 'sine', amp: 1 },
+        { wave: 'sine', amp: 0.3, ratio: 2.76, decay: 0.25 },
+        { wave: 'sine', amp: 0.15, ratio: 5.4, decay: 0.1 },
+      ],
+      env: { a: 0.001, d: 1.1, s: 0 },
+      level,
+      pan,
+      send: 0.35,
+    });
+  }
+
+  toyPiano(b: number, midi: number, beats: number, level = 0.13, pan = 0): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi),
+      oscs: [
+        { wave: 'tri', amp: 1 },
+        { wave: 'sine', amp: 0.5, ratio: 3.9, decay: 0.12 },
+        { wave: 'square', amp: 0.08, ratio: 2, decay: 0.2 },
+      ],
+      env: { a: 0.002, d: Math.min(1.2, this.t(beats) + 0.3), s: 0 },
+      filter: { type: 'lp', from: 6000 },
+      level,
+      pan,
+      send: 0.25,
+    });
+  }
+
+  /** Ukulele strum: chord notes a few ms apart, down (low→high) or up. */
+  strum(b: number, notes: number[], beats: number, level = 0.08, up = false): void {
+    const order = up ? [...notes].reverse() : notes;
+    order.forEach((m, i) => {
+      this.voice({
+        t: this.t(b) + i * 0.014,
+        freq: hz(m),
+        oscs: [
+          { wave: 'tri', amp: 1 },
+          { wave: 'saw', amp: 0.3, detune: 4 },
+        ],
+        env: { a: 0.002, d: Math.min(this.t(beats) + 0.25, 1), s: 0 },
+        filter: { type: 'lp', from: 3800, to: 1200, sweep: 0.3 },
+        level: up ? level * 0.7 : level,
+        pan: (i / Math.max(1, notes.length - 1) - 0.5) * 0.6,
+        send: 0.2,
+      });
     });
   }
 
@@ -857,7 +951,218 @@ const goldenHour: Song = {
   },
 };
 
-export const SONGS: Song[] = [sunnyPaws, zoomies, lazyAfternoon, tinyDetective, goldenHour];
+// ---- "sunny pop" family: the Sunny Paws recipe with its own key, groove and lead ----
+
+type SunnyPop = {
+  id: string;
+  title: string;
+  bpm: number;
+  mood: string;
+  tags: string[];
+  /** Four chords (around C4–C5), one per bar, looping. */
+  chords: number[][];
+  /** Bass note per chord. */
+  roots: number[];
+  /** Four-bar chorus melody; `ending` replaces its last bar every second time round. */
+  melody: Note[][];
+  ending: Note[];
+  /** Last bar: chord, bass, top note. */
+  final: { chord: number[]; root: number; top: number };
+  lead(s: Studio, b: number, midi: number, beats: number, soft: boolean): void;
+  rhythm: 'arp' | 'strum' | 'marimba';
+  drums: 'pop' | 'march';
+  /** Little extras per bar (bloops, chirps…). */
+  extra?(s: Studio, bar: number, section: 'intro' | 'verse' | 'chorus' | 'break'): void;
+};
+
+// 4 intro · 8 verse · 8 chorus · 4 break · 5 chorus · 1 ending
+const POP_BARS = 30;
+
+function sunnyPop(p: SunnyPop): Song {
+  return {
+    id: p.id,
+    title: p.title,
+    bpm: p.bpm,
+    bars: POP_BARS,
+    mood: p.mood,
+    tags: p.tags,
+    compose(s) {
+      for (let bar = 0; bar < POP_BARS - 1; bar++) {
+        const k = bar % 4;
+        const ch = p.chords[k] as number[];
+        const root = ch[0] as number;
+        const b0 = bar * 4;
+        const section = bar < 4 ? 'intro' : bar < 12 ? 'verse' : bar >= 20 && bar < 24 ? 'break' : 'chorus';
+        const drums = section === 'verse' || section === 'chorus';
+
+        // Rhythm instrument, all the way through.
+        if (p.rhythm === 'arp') {
+          const arp = [ch[0], ch[1], ch[2], root + 12, ch[2], ch[1], root + 12, ch[2]];
+          arp.forEach((m, i) => s.pluck(b0 + i / 2, m as number, 0.5, 0.13, i % 2 ? 0.3 : -0.3, 3500));
+        } else if (p.rhythm === 'strum') {
+          const notes = [...ch, root + 12];
+          for (const [beat, up] of [[0, false], [1, false], [1.5, true], [2.5, true], [3, false], [3.5, true]] as const) {
+            s.strum(b0 + beat, notes, up ? 0.5 : 1, section === 'intro' ? 0.06 : 0.075, up);
+          }
+        } else {
+          const pat = [ch[0], ch[2], root + 12, ch[2], ch[1], ch[2], root + 12, ch[2]];
+          pat.forEach((m, i) => s.marimba(b0 + i / 2, m as number, i === 0 ? 0.24 : 0.17, i % 2 ? 0.25 : -0.25));
+        }
+
+        if (p.drums === 'pop') {
+          for (let i = 0; i < 8; i++) s.shaker(b0 + i / 2 + 0.02, i % 2 ? 0.08 : 0.05);
+          if (drums) {
+            s.kick(b0, 0.9);
+            s.kick(b0 + 2, 0.8);
+            if (section === 'chorus') s.kick(b0 + 2.5, 0.6);
+            s.clap(b0 + 1, 0.4);
+            s.clap(b0 + 3, 0.4);
+          }
+        } else {
+          for (let i = 0; i < 8; i++) s.woodblock(b0 + i / 2, i % 2 ? 84 : 79, i % 2 ? 0.1 : 0.14);
+          if (drums) {
+            for (let i = 0; i < 4; i++) s.kick(b0 + i, 0.85);
+            s.clap(b0 + 1, 0.4);
+            s.clap(b0 + 3, 0.4);
+            for (let i = 0; i < 4; i++) s.hat(b0 + i + 0.5, 0.1, true);
+          }
+        }
+        if (drums) for (let i = 0; i < 4; i++) s.bass(b0 + i, p.roots[k] as number, i === 3 ? 0.5 : 1, 0.32);
+
+        // Melody: teased softly in the second half of the verse, full in the choruses, gentle in the break.
+        const tease = section === 'verse' && bar >= 8;
+        if (section === 'chorus' || section === 'break' || tease) {
+          const notes = bar % 8 === 7 ? p.ending : (p.melody[k] as Note[]);
+          const soft = section !== 'chorus';
+          s.phrase(bar, notes, (b, m, l) => p.lead(s, b, m, l, soft));
+          if (section === 'chorus') s.pad(b0, ch.map((m) => m + 12), 4, 0.022, 2000);
+        }
+        p.extra?.(s, bar, section);
+        if (bar === 11 || bar === 23) s.riser(b0 + 2, 2, 0.15);
+        if (bar === 12 || bar === 24) s.crash(b0, 0.15);
+      }
+      const end = (POP_BARS - 1) * 4;
+      s.kick(end, 0.9);
+      s.crash(end, 0.15);
+      s.keys(end, p.final.chord, 4, 0.09);
+      p.lead(s, end, p.final.top, 4, false);
+      s.bass(end, p.final.root, 3, 0.3);
+    },
+  };
+}
+
+const happyTail = sunnyPop({
+  id: 'happy-tail',
+  title: 'Happy Tail',
+  bpm: 124,
+  mood: 'Happy',
+  tags: ['cute'],
+  // G – Em – C – D
+  chords: [[67, 71, 74], [64, 67, 71], [60, 64, 67], [62, 66, 69]],
+  roots: [43, 40, 48, 50],
+  melody: [
+    [[0, 71, 0.5], [0.5, 74, 0.5], [1, 79, 1], [2, 78, 0.5], [2.5, 79, 0.5], [3, 74, 1]],
+    [[0, 76, 1], [1, 74, 0.5], [1.5, 71, 0.5], [2, 67, 1], [3, 71, 1]],
+    [[0, 72, 0.5], [0.5, 76, 0.5], [1, 79, 1], [2, 81, 0.5], [2.5, 79, 0.5], [3, 76, 1]],
+    [[0, 78, 1], [1, 76, 0.5], [1.5, 74, 0.5], [2, 74, 2]],
+  ],
+  ending: [[0, 78, 0.5], [0.5, 81, 0.5], [1, 79, 1], [2, 78, 1], [3, 81, 1]],
+  final: { chord: [55, 59, 62, 67], root: 43, top: 79 },
+  lead: (s, b, m, _l, soft) => s.marimba(b, m + 12, soft ? 0.16 : 0.26, 0.1),
+  rhythm: 'arp',
+  drums: 'pop',
+});
+
+const picnicDay = sunnyPop({
+  id: 'picnic-day',
+  title: 'Picnic Day',
+  bpm: 112,
+  mood: 'Happy',
+  tags: ['cute'],
+  // D – G – Bm – A
+  chords: [[62, 66, 69], [59, 62, 67], [59, 62, 66], [61, 64, 69]],
+  roots: [50, 43, 47, 45],
+  melody: [
+    [[0, 74, 1], [1, 78, 1], [2, 81, 1.5], [3.5, 78, 0.5]],
+    [[0, 79, 1], [1, 78, 0.5], [1.5, 76, 0.5], [2, 74, 1], [3, 71, 1]],
+    [[0, 74, 1.5], [1.5, 73, 0.5], [2, 71, 1], [3, 78, 1]],
+    [[0, 76, 1], [1, 73, 1], [2, 69, 1.5], [3.5, 73, 0.5]],
+  ],
+  ending: [[0, 73, 1], [1, 76, 1], [2, 81, 2]],
+  final: { chord: [50, 57, 62, 66], root: 50, top: 74 },
+  lead: (s, b, m, l, soft) => s.whistle(b, m, l, soft ? 0.07 : 0.11),
+  rhythm: 'strum',
+  drums: 'pop',
+  extra(s, bar, section) {
+    // Birdsong in the intro and the break.
+    if ((section === 'intro' || section === 'break') && bar % 2 === 1) {
+      s.slide(bar * 4 + 2.5, 96, 100, 0.12, 0.05);
+      s.slide(bar * 4 + 2.75, 97, 101, 0.12, 0.05);
+    }
+  },
+});
+
+const bubbleBath = sunnyPop({
+  id: 'bubble-bath',
+  title: 'Bubble Bath',
+  bpm: 104,
+  mood: 'Playful',
+  tags: ['cute', 'funny'],
+  // F – Am – Bb – C
+  chords: [[65, 69, 72], [64, 69, 72], [65, 70, 74], [64, 67, 72]],
+  roots: [41, 45, 46, 48],
+  melody: [
+    [[0, 72, 0.5], [0.5, 77, 0.5], [1, 81, 0.5], [1.5, 77, 0.5], [2, 84, 1], [3, 81, 1]],
+    [[0, 76, 0.5], [0.5, 81, 0.5], [1, 84, 0.5], [1.5, 81, 0.5], [2, 76, 2]],
+    [[0, 74, 0.5], [0.5, 77, 0.5], [1, 82, 1], [2, 81, 0.5], [2.5, 79, 0.5], [3, 77, 1]],
+    [[0, 79, 1.5], [1.5, 76, 0.5], [2, 72, 1], [3, 79, 1]],
+  ],
+  ending: [[0, 79, 0.5], [0.5, 81, 0.5], [1, 82, 0.5], [1.5, 84, 0.5], [2, 84, 2]],
+  final: { chord: [53, 60, 65, 69], root: 41, top: 84 },
+  lead: (s, b, m, _l, soft) => s.glock(b, m + 12, soft ? 0.08 : 0.13),
+  rhythm: 'marimba',
+  drums: 'pop',
+  extra(s, bar, section) {
+    // Bubble "bloops".
+    if (section === 'chorus' || section === 'intro') {
+      s.slide(bar * 4 + 3.5, 72 + (bar % 3) * 4, 84 + (bar % 3) * 4, 0.2, 0.06);
+    }
+  },
+});
+
+const puppyParade = sunnyPop({
+  id: 'puppy-parade',
+  title: 'Puppy Parade',
+  bpm: 128,
+  mood: 'Energetic',
+  tags: ['cute', 'hype'],
+  // A – E – F#m – D
+  chords: [[69, 73, 76], [68, 71, 76], [66, 69, 73], [66, 69, 74]],
+  roots: [45, 40, 42, 50],
+  melody: [
+    [[0, 73, 0.5], [0.5, 76, 0.5], [1, 81, 1], [2, 80, 0.5], [2.5, 81, 0.5], [3, 83, 1]],
+    [[0, 80, 1], [1, 76, 1], [2, 71, 1], [3, 76, 1]],
+    [[0, 78, 0.5], [0.5, 81, 0.5], [1, 85, 1], [2, 83, 0.5], [2.5, 81, 0.5], [3, 78, 1]],
+    [[0, 78, 1], [1, 76, 0.5], [1.5, 74, 0.5], [2, 73, 1], [3, 71, 1]],
+  ],
+  ending: [[0, 74, 0.5], [0.5, 78, 0.5], [1, 81, 0.5], [1.5, 83, 0.5], [2, 81, 2]],
+  final: { chord: [57, 61, 64, 69], root: 45, top: 81 },
+  lead: (s, b, m, l, soft) => s.toyPiano(b, m, l, soft ? 0.09 : 0.14),
+  rhythm: 'arp',
+  drums: 'march',
+});
+
+export const SONGS: Song[] = [
+  sunnyPaws,
+  happyTail,
+  picnicDay,
+  bubbleBath,
+  puppyParade,
+  zoomies,
+  lazyAfternoon,
+  tinyDetective,
+  goldenHour,
+];
 
 export function songDuration(song: Song): number {
   return (song.bars * 4 * 60) / song.bpm + TAIL_SEC;
