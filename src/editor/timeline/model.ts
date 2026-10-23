@@ -62,6 +62,8 @@ export type Clip = {
   outSec: number;
   /** Constant playback speed, 0.25..4. */
   speed: number;
+  /** Original-sound gain, 0 (muted) .. 2. Missing = 1. */
+  volume?: number;
 };
 
 export type Project = {
@@ -72,7 +74,38 @@ export type Project = {
   aspect: '9:16';
   /** Main video track. Magnetic: clips play back to back with no gaps. */
   main: Clip[];
+  /** Music / SFX / voiceover clips, freely positioned. Missing = none (projects from before Phase 3). */
+  audio?: AudioClip[];
+  /** Mix settings. Missing = defaults. */
+  mix?: MixSettings;
 };
+
+export type AudioTrackKind = 'music' | 'sfx' | 'voice';
+
+export type AudioClip = {
+  id: string;
+  track: AudioTrackKind;
+  /** Library item (music, sound effect or recorded voiceover). */
+  sourceId: string;
+  /** Timeline position of the clip's first sample, seconds. */
+  start: number;
+  /** Source window, seconds. */
+  inSec: number;
+  outSec: number;
+  /** Gain 0..2. */
+  volume: number;
+  fadeIn: number;
+  fadeOut: number;
+};
+
+export type MixSettings = {
+  /** Lower music under voiceover and loud video sound. */
+  duck: boolean;
+  /** How far music drops while ducked, dB (negative). */
+  duckDb: number;
+};
+
+export const DEFAULT_MIX: MixSettings = { duck: true, duckDb: -12 };
 
 export const MIN_SPEED = 0.25;
 export const MAX_SPEED = 4;
@@ -192,10 +225,23 @@ export function removeClip(project: Project, clipId: string): Project {
   );
 }
 
+/** Removes main-track and audio clips with the given ids (main track ripples). */
 export function removeClips(project: Project, clipIds: ReadonlySet<string>): Project {
+  const audio = project.audio?.filter((c) => !clipIds.has(c.id));
+  return {
+    ...replaceMain(
+      project,
+      project.main.filter((c) => !clipIds.has(c.id)),
+    ),
+    ...(audio ? { audio } : {}),
+  };
+}
+
+export function setClipVolume(project: Project, clipIds: ReadonlySet<string>, volume: number): Project {
+  const v = Math.min(Math.max(volume, 0), 2);
   return replaceMain(
     project,
-    project.main.filter((c) => !clipIds.has(c.id)),
+    project.main.map((c) => (clipIds.has(c.id) ? { ...c, volume: v } : c)),
   );
 }
 
