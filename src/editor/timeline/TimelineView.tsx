@@ -1,11 +1,25 @@
 // Canvas timeline (no per-clip DOM). The playhead is fixed at the horizontal centre; the track scrolls under it.
+// Rows: the magnetic video track, then one row per audio track in use (music, SFX, voiceover).
 // Gestures: drag = scrub (with inertia), pinch = zoom, tap = select, drag a selected clip's handle = trim,
-// long-press a clip = reorder.
+// long-press a video clip = reorder, drag a selected audio clip = move. Edges snap to the playhead, cuts,
+// other audio clips and music beats.
 import { useEffect, useRef } from 'react';
 import { readFile } from '../../engine/storage/opfs';
+import { useLibrary } from '../../library/audioLibrary';
 import { useAssets, useEditor, usePlayback } from '../store';
 import {
+  AUDIO_TRACKS,
+  audioClips,
+  audioEnd,
+  moveAudioClip,
+  nearest,
+  timelineBeats,
+  trimAudioClip,
+} from './audio';
+import {
   type Asset,
+  type AudioClip,
+  type AudioTrackKind,
   type Clip,
   type Project,
   clipDuration,
@@ -18,7 +32,26 @@ import {
 const RULER_H = 22;
 const TRACK_Y = 30;
 const TRACK_H = 64;
-export const TIMELINE_HEIGHT = TRACK_Y + TRACK_H + 16;
+const AROW_H = 34;
+const AROW_GAP = 6;
+const AUDIO_Y = TRACK_Y + TRACK_H + 10;
+
+const TRACK_COLORS: Record<AudioTrackKind, { fill: string; wave: string; label: string }> = {
+  music: { fill: '#4c1d95', wave: '#c4b5fd', label: '♫' },
+  sfx: { fill: '#075985', wave: '#7dd3fc', label: '✦' },
+  voice: { fill: '#78350f', wave: '#fcd34d', label: '🎙' },
+};
+
+/** Audio rows shown: the tracks that have clips, in fixed order. */
+export function audioRows(p: Project | null): AudioTrackKind[] {
+  const clips = p ? audioClips(p) : [];
+  return AUDIO_TRACKS.filter((k) => clips.some((c) => c.track === k));
+}
+
+export function timelineHeight(p: Project | null): number {
+  const rows = audioRows(p).length;
+  return rows === 0 ? TRACK_Y + TRACK_H + 16 : AUDIO_Y + rows * (AROW_H + AROW_GAP) + 6;
+}
 const HANDLE_W = 18;
 const MIN_PPS = 6;
 const MAX_PPS = 600;
@@ -29,6 +62,7 @@ const BLOCK_W = 56;
 const BLOCK_GAP = 6;
 
 type Hit = { index: number; clip: Clip; start: number; x0: number; w: number };
+type AudioHit = { clip: AudioClip; x0: number; w: number; y: number };
 
 type Mode =
   | { kind: 'idle' }
@@ -36,6 +70,8 @@ type Mode =
   | { kind: 'pan'; x: number; time: number }
   | { kind: 'trim'; edge: 'in' | 'out'; clipId: string; x: number; time: number; base: Clip; assetDuration: number }
   | { kind: 'reorder'; from: number; to: number; x: number }
+  | { kind: 'moveAudio'; clipId: string; x: number; base: AudioClip }
+  | { kind: 'trimAudio'; clipId: string; edge: 'in' | 'out'; x: number; base: AudioClip; sourceDuration: number }
   | { kind: 'pinch'; dist: number; pps: number };
 
 export type TimelineCallbacks = {
@@ -59,7 +95,7 @@ function formatTick(sec: number, step: number): string {
 class TimelineController {
   private ctx: CanvasRenderingContext2D;
   private width = 0;
-  private height = TIMELINE_HEIGHT;
+  private height = timelineHeight(null);
   private dpr = 1;
   pps = 60;
   private dirty = true;
@@ -80,7 +116,12 @@ class TimelineController {
     if (!ctx) throw new Error('2D canvas unavailable');
     this.ctx = ctx;
     const mark = () => this.invalidate();
-    this.unsub.push(useEditor.subscribe(mark), useAssets.subscribe(mark), usePlayback.subscribe(mark));
+    this.unsub.push(
+      useEditor.subscribe(mark),
+      useAssets.subscribe(mark),
+      usePlayback.subscribe(mark),
+      useLibrary.subscribe(mark),
+    );
     canvas.addEventListener('pointerdown', this.onDown);
     canvas.addEventListener('pointermove', this.onMove);
     canvas.addEventListener('pointerup', this.onUp);
@@ -100,9 +141,10 @@ class TimelineController {
     for (const s of this.sprites.values()) if (s instanceof ImageBitmap) s.close();
   }
 
-  resize(cssWidth: number): void {
+  resize(cssWidth: number, cssHeight: number): void {
     this.dpr = Math.min(window.devicePixelRatio || 1, 3);
     this.width = cssWidth;
+    this.height = cssHeight;
     this.canvas.width = Math.round(cssWidth * this.dpr);
     this.canvas.height = Math.round(this.height * this.dpr);
     this.invalidate();
@@ -170,6 +212,67 @@ class TimelineController {
     return null;
   }
 
+  private rowY(kind: AudioTrackKind): number | null {
+    const i = audioRows(this.project).indexOf(kind);
+    return i < 0 ? null : AUDIO_Y + i * (AROW_H + AROW_GAP);
+  }
+
+  private audioHitAt(x: number, y: number): AudioHit | null {
+    const p = this.project;
+    if (!p) return null;
+    // Later clips draw on top, so they win.
+    const clips = audioClips(p);
+    for (let i = clips.length - 1; i >= 0; i--) {
+      const clip = clips[i] as AudioClip;
+      const ry = this.rowY(clip.track);
+      if (ry === null || y < ry - 4 || y > ry + AROW_H + 4) continue;
+      const x0 = this.xOf(clip.start);
+      const w = (clip.outSec - clip.inSec) * this.pps;
+      if (x >= x0 && x <= x0 + w) return { clip, x0, w, y: ry };
+    }
+    return null;
+  }
+
+  private audioHandleAt(x: number, y: number): { edge: 'in' | 'out'; clip: AudioClip } | null {
+    const p = this.project;
+    const selected = useEditor.getState().selection;
+    if (!p || selected.length !== 1) return null;
+    const clip = audioClips(p).find((c) => c.id === selected[0]);
+    const ry = clip ? this.rowY(clip.track) : null;
+    if (!clip || ry === null || y < ry - 8 || y > ry + AROW_H + 8) return null;
+    const x0 = this.xOf(clip.start);
+    const w = (clip.outSec - clip.inSec) * this.pps;
+    if (x >= x0 - 12 && x <= x0 + 12) return { edge: 'in', clip };
+    if (x >= x0 + w - 12 && x <= x0 + w + 12) return { edge: 'out', clip };
+    return null;
+  }
+
+  private beats(): number[] {
+    const p = this.project;
+    const items = useLibrary.getState().items;
+    return p ? timelineBeats(p, (id) => items[id]?.beats) : [];
+  }
+
+  /** Snap `t` to the playhead, a cut, another audio clip's edge or a beat, if within SNAP_PX. */
+  private snapTime(t: number, excludeId?: string): number {
+    const p = this.project;
+    if (!p) return t;
+    const starts = clipStarts(p);
+    const points = [
+      this.time,
+      0,
+      ...starts,
+      projectDuration(p),
+      ...audioClips(p)
+        .filter((c) => c.id !== excludeId)
+        .flatMap((c) => [c.start, audioEnd(c)]),
+      ...this.beats(),
+    ];
+    const hit = nearest(points, t, SNAP_PX / this.pps);
+    if (hit !== null && hit !== t) haptic();
+    return hit ?? t;
+  }
+
   private setTime(t: number): void {
     const p = this.project;
     const total = p ? projectDuration(p) : 0;
@@ -198,6 +301,29 @@ class TimelineController {
       return;
     }
     if (this.pointers.size > 2) return;
+
+    const audioHandle = this.audioHandleAt(pt.x, pt.y);
+    if (audioHandle) {
+      const item = useLibrary.getState().items[audioHandle.clip.sourceId];
+      useEditor.getState().beginGesture();
+      this.mode = {
+        kind: 'trimAudio',
+        clipId: audioHandle.clip.id,
+        edge: audioHandle.edge,
+        x: pt.x,
+        base: audioHandle.clip,
+        sourceDuration: item?.durationSec ?? audioHandle.clip.outSec,
+      };
+      haptic();
+      return;
+    }
+    const audioHit = this.audioHitAt(pt.x, pt.y);
+    const selection = useEditor.getState().selection;
+    if (audioHit && selection.length === 1 && selection[0] === audioHit.clip.id) {
+      useEditor.getState().beginGesture();
+      this.mode = { kind: 'moveAudio', clipId: audioHit.clip.id, x: pt.x, base: audioHit.clip };
+      return;
+    }
 
     const handle = this.handleAt(pt.x, pt.y);
     if (handle) {
@@ -250,6 +376,22 @@ class TimelineController {
       case 'trim':
         this.trimMove(m, pt.x);
         break;
+      case 'moveAudio': {
+        const len = m.base.outSec - m.base.inSec;
+        let start = Math.max(0, m.base.start + (pt.x - m.x) / this.pps);
+        // Snap whichever edge is closer to something.
+        const s0 = this.snapTime(start, m.clipId);
+        const s1 = this.snapTime(start + len, m.clipId) - len;
+        start = Math.abs(s0 - start) <= Math.abs(s1 - start) || s1 === start ? s0 : s1;
+        useEditor.getState().apply((p) => moveAudioClip(p, m.clipId, start));
+        break;
+      }
+      case 'trimAudio': {
+        const base = m.edge === 'in' ? m.base.start : audioEnd(m.base);
+        const t = this.snapTime(base + (pt.x - m.x) / this.pps, m.clipId);
+        useEditor.getState().apply((p) => trimAudioClip(p, m.clipId, m.edge, t, m.sourceDuration));
+        break;
+      }
       case 'reorder': {
         const n = this.project?.main.length ?? 0;
         const to = Math.round(m.from + (pt.x - this.cx) / (BLOCK_W + BLOCK_GAP));
@@ -287,8 +429,9 @@ class TimelineController {
       let target = base.outSec + dxSec * base.speed;
       const p = this.project;
       const start = p ? (clipStarts(p)[p.main.findIndex((c) => c.id === m.clipId)] ?? 0) : 0;
-      const edgeX = this.xOf(start + (target - base.inSec) / base.speed);
-      if (Math.abs(edgeX - this.cx) < SNAP_PX) target = base.inSec + (this.time - start) * base.speed;
+      const edgeT = start + (target - base.inSec) / base.speed;
+      const snapped = this.snapTime(edgeT, m.clipId);
+      if (snapped !== edgeT) target = base.inSec + (snapped - start) * base.speed;
       editor.apply((proj) => trimClip(proj, m.clipId, 'out', target, m.assetDuration));
       const clip = useEditor.getState().project?.main.find((c) => c.id === m.clipId) ?? base;
       this.cb.onPeek(clip.assetId, Math.max(clip.inSec, clip.outSec - 1 / 30));
@@ -308,10 +451,10 @@ class TimelineController {
     if (this.pointers.size > 0) return;
 
     if (m.kind === 'pending') {
-      const hit = this.hitAt(m.x, m.y);
+      const id = this.audioHitAt(m.x, m.y)?.clip.id ?? this.hitAt(m.x, m.y)?.clip.id;
       const editor = useEditor.getState();
-      if (!hit) editor.select([]);
-      else editor.select(editor.selection.length === 1 && editor.selection[0] === hit.clip.id ? [] : [hit.clip.id]);
+      if (!id) editor.select([]);
+      else editor.select(editor.selection.length === 1 && editor.selection[0] === id ? [] : [id]);
     } else if (m.kind === 'pan') {
       this.startInertia(e.timeStamp);
     }
@@ -323,6 +466,8 @@ class TimelineController {
     if (m.kind === 'trim') {
       useEditor.getState().endGesture();
       this.cb.onPeekEnd();
+    } else if (m.kind === 'moveAudio' || m.kind === 'trimAudio') {
+      useEditor.getState().endGesture();
     } else if (m.kind === 'reorder' && commitReorder && m.to !== m.from) {
       const editor = useEditor.getState();
       const clip = editor.project?.main[m.from];
@@ -387,6 +532,7 @@ class TimelineController {
     this.drawRuler(p);
     if (this.mode.kind === 'reorder') this.drawReorder(p, this.mode);
     else this.drawTrack(p);
+    this.drawAudio(p);
     // Playhead.
     ctx.fillStyle = '#fff';
     ctx.fillRect(this.cx - 1, 4, 2, h - 8);
@@ -461,6 +607,81 @@ class TimelineController {
     }
   }
 
+  private drawAudio(p: Project): void {
+    const { ctx } = this;
+    const items = useLibrary.getState().items;
+    const selected = new Set(useEditor.getState().selection);
+    for (const kind of audioRows(p)) {
+      const y = this.rowY(kind) as number;
+      const color = TRACK_COLORS[kind];
+      ctx.fillStyle = '#18181b';
+      ctx.fillRect(0, y, this.width, AROW_H);
+      for (const clip of audioClips(p).filter((c) => c.track === kind)) {
+        const x0 = this.xOf(clip.start);
+        const w = Math.max(2, (clip.outSec - clip.inSec) * this.pps);
+        if (x0 > this.width || x0 + w < 0) continue;
+        const item = items[clip.sourceId];
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(x0, y, w, AROW_H, 5);
+        ctx.clip();
+        ctx.fillStyle = color.fill;
+        ctx.fillRect(x0, y, w, AROW_H);
+        // Waveform: the item's peaks mapped over the source window.
+        if (item && item.waveform.length > 0 && item.durationSec > 0) {
+          ctx.fillStyle = color.wave;
+          const n = item.waveform.length;
+          const from = Math.max(x0, 0);
+          const to = Math.min(x0 + w, this.width);
+          for (let x = from; x < to; x += 3) {
+            const src = clip.inSec + (x - x0) / this.pps;
+            const peak = item.waveform[Math.min(n - 1, Math.floor((src / item.durationSec) * n))] ?? 0;
+            const h = Math.max(1, peak * (AROW_H - 8) * clip.volume);
+            ctx.fillRect(x, y + (AROW_H - h) / 2, 2, h);
+          }
+        }
+        // Fades as dark wedges.
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        if (clip.fadeIn > 0) {
+          ctx.beginPath();
+          ctx.moveTo(x0, y);
+          ctx.lineTo(x0 + clip.fadeIn * this.pps, y);
+          ctx.lineTo(x0, y + AROW_H);
+          ctx.fill();
+        }
+        if (clip.fadeOut > 0) {
+          ctx.beginPath();
+          ctx.moveTo(x0 + w, y);
+          ctx.lineTo(x0 + w - clip.fadeOut * this.pps, y);
+          ctx.lineTo(x0 + w, y + AROW_H);
+          ctx.fill();
+        }
+        this.label(`${color.label} ${item?.title ?? '…'}`, Math.max(x0, 0) + 6, y + 3);
+        ctx.restore();
+        if (selected.has(clip.id)) {
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(x0, y, w, AROW_H, 5);
+          ctx.stroke();
+          if (selected.size === 1) {
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(x0, y, 6, AROW_H);
+            ctx.fillRect(x0 + w - 6, y, 6, AROW_H);
+          }
+        }
+      }
+      // Beat ticks along the music row.
+      if (kind === 'music') {
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        for (const b of this.beats()) {
+          const x = this.xOf(b);
+          if (x >= 0 && x <= this.width) ctx.fillRect(x, y + AROW_H - 5, 1, 5);
+        }
+      }
+    }
+  }
+
   private drawSelection(x: number, w: number, handles: boolean): void {
     const { ctx } = this;
     ctx.strokeStyle = '#fff';
@@ -532,6 +753,7 @@ export function TimelineView(props: TimelineCallbacks) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cbRef = useRef(props);
   cbRef.current = props;
+  const height = useEditor((s) => timelineHeight(s.project));
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -542,7 +764,7 @@ export function TimelineView(props: TimelineCallbacks) {
       onPeekEnd: () => cbRef.current.onPeekEnd(),
     });
     const ro = new ResizeObserver(([entry]) => {
-      if (entry) controller.resize(entry.contentRect.width);
+      if (entry) controller.resize(entry.contentRect.width, entry.contentRect.height);
     });
     ro.observe(canvas);
     return () => {
@@ -556,7 +778,7 @@ export function TimelineView(props: TimelineCallbacks) {
       ref={canvasRef}
       data-testid="timeline"
       className="block w-full touch-none"
-      style={{ height: TIMELINE_HEIGHT }}
+      style={{ height }}
     />
   );
 }
