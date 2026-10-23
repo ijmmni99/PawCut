@@ -6,6 +6,8 @@ import { TopBar } from '../app/ui/TopBar';
 import { importFiles, retryImport } from '../engine/media/importClient';
 import { closeProject, openProject, renameProject } from '../library/projects';
 import { ExportSheet } from './ExportSheet';
+import { OverlayCanvas } from './overlay/OverlayCanvas';
+import { CAPTIONS_ID, addText, duplicateText, newTextItem, setCaptions } from './overlay/textOps';
 import { PreviewPlayer } from './preview/player';
 import { useAssets, useEditor, usePlayback } from './store';
 import { TimelineView } from './timeline/TimelineView';
@@ -19,6 +21,9 @@ const MusicSheet = lazy(() => import('./tools/MusicSheet').then((m) => ({ defaul
 const SfxSheet = lazy(() => import('./tools/SfxSheet').then((m) => ({ default: m.SfxSheet })));
 const RecordSheet = lazy(() => import('./tools/RecordSheet').then((m) => ({ default: m.RecordSheet })));
 const AudioClipSheet = lazy(() => import('./tools/AudioSheets').then((m) => ({ default: m.AudioClipSheet })));
+const TextSheet = lazy(() => import('./tools/TextSheet').then((m) => ({ default: m.TextSheet })));
+// Captions pull in the speech-recognition client (the Whisper worker itself loads only on Generate).
+const CaptionsSheet = lazy(() => import('./tools/CaptionsSheet').then((m) => ({ default: m.CaptionsSheet })));
 const ClipVolumeSheet = lazy(() => import('./tools/AudioSheets').then((m) => ({ default: m.ClipVolumeSheet })));
 
 /** Video clips a tool acts on: the selected ones, or the clip under the playhead. */
@@ -146,11 +151,17 @@ export function EditorScreen({ projectId }: { projectId: string }) {
 
   const [missing, setMissing] = useState(false);
   const [sheet, setSheet] = useState<
-    'speed' | 'export' | 'autocut' | 'music' | 'sfx' | 'record' | 'audioClip' | 'volume' | null
+    'speed' | 'export' | 'autocut' | 'music' | 'sfx' | 'record' | 'audioClip' | 'volume' | 'text' | 'captions' | null
   >(null);
   const selectedAudioId = useEditor((s) =>
     s.selection.length === 1 && s.project?.audio?.some((c) => c.id === s.selection[0]) ? (s.selection[0] as string) : null,
   );
+  const selectedTextId = useEditor((s) =>
+    s.selection.length === 1 && s.project?.texts?.some((t) => t.id === s.selection[0]) ? (s.selection[0] as string) : null,
+  );
+  const captionsSelected = useEditor((s) => s.selection.length === 1 && s.selection[0] === CAPTIONS_ID);
+  const [textFocus, setTextFocus] = useState(false);
+  const [safeZone, setSafeZone] = useState(false);
   const [volumeTargets, setVolumeTargets] = useState<string[]>([]);
   const [speedTargets, setSpeedTargets] = useState<string[]>([]);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -278,6 +289,31 @@ export function EditorScreen({ projectId }: { projectId: string }) {
     select([]);
   };
 
+  const newText = () => {
+    if (!project) return;
+    playerRef.current?.pause();
+    const t = usePlayback.getState().time;
+    const total = projectDuration(project);
+    const item = newTextItem(Math.min(t, Math.max(0, total - 0.5)), Math.max(0.5, Math.min(3, total - t)));
+    apply((p) => addText(p, item));
+    select([item.id]);
+    setTextFocus(true);
+    setSheet('text');
+  };
+
+  const editText = () => {
+    setTextFocus(false);
+    openSheet('text');
+  };
+
+  const removeSelected = () => {
+    const id = useEditor.getState().selection[0];
+    if (!id) return;
+    if (id === CAPTIONS_ID) apply((p) => setCaptions(p, null));
+    else apply((p) => removeClips(p, new Set([id])));
+    select([]);
+  };
+
   const openExport = () => {
     playerRef.current?.pause();
     setSheet('export');
@@ -333,13 +369,19 @@ export function EditorScreen({ projectId }: { projectId: string }) {
       </TopBar>
 
       <div ref={stageRef} className="relative flex min-h-0 flex-[1_1_45%] items-center justify-center px-3 py-2">
-        <canvas
-          ref={canvasRef}
-          data-testid="preview"
-          onClick={() => playerRef.current?.toggle()}
-          className="rounded-lg bg-black"
-          style={{ width: box.w, height: box.h }}
-        />
+        <canvas ref={canvasRef} data-testid="preview" className="rounded-lg bg-black" style={{ width: box.w, height: box.h }} />
+        <OverlayCanvas width={box.w} height={box.h} safeZone={safeZone} onTap={() => playerRef.current?.toggle()} />
+        {!empty && (
+          <button
+            type="button"
+            aria-label="TikTok safe zone"
+            aria-pressed={safeZone}
+            onClick={() => setSafeZone(!safeZone)}
+            className={`absolute right-4 top-3 flex size-9 items-center justify-center rounded-full ${safeZone ? 'bg-pink-500' : 'bg-black/50'}`}
+          >
+            <Icon name="frame" size={18} />
+          </button>
+        )}
         {empty && (
           <button
             type="button"
@@ -374,7 +416,24 @@ export function EditorScreen({ projectId }: { projectId: string }) {
 
       <ClipIssueBar />
       <nav className="flex gap-1 overflow-x-auto border-t border-zinc-800 px-2 pb-[calc(env(safe-area-inset-bottom)+4px)] pt-1">
-        {selectedAudioId ? (
+        {selectedTextId ? (
+          <>
+            <ToolButton icon="text" label="Edit text" onClick={editText} />
+            <ToolButton
+              icon="copy"
+              label="Duplicate"
+              onClick={() => apply((p) => duplicateText(p, selectedTextId))}
+            />
+            <ToolButton icon="trash" label="Delete" onClick={removeSelected} />
+            <ToolButton icon="back" label="Done" onClick={() => select([])} />
+          </>
+        ) : captionsSelected ? (
+          <>
+            <ToolButton icon="captions" label="Edit captions" onClick={() => openSheet('captions')} />
+            <ToolButton icon="trash" label="Remove" onClick={removeSelected} />
+            <ToolButton icon="back" label="Done" onClick={() => select([])} />
+          </>
+        ) : selectedAudioId ? (
           <>
             <ToolButton icon="volume" label="Volume & fades" onClick={() => openSheet('audioClip')} />
             <ToolButton icon="trash" label="Delete" onClick={removeAudio} />
@@ -384,6 +443,8 @@ export function EditorScreen({ projectId }: { projectId: string }) {
           <>
             <ToolButton icon="plus" label="Add" onClick={() => fileInput.current?.click()} />
             <ToolButton icon="sparkle" label="Auto-Cut" onClick={() => openSheet('autocut')} disabled={!hasTarget} />
+            <ToolButton icon="captions" label="Captions" onClick={() => openSheet('captions')} disabled={!hasTarget} />
+            <ToolButton icon="text" label="Text" onClick={newText} disabled={!hasTarget} />
             <ToolButton icon="music" label="Music" onClick={() => openSheet('music')} disabled={!hasTarget} />
             <ToolButton icon="bolt" label="SFX" onClick={() => openSheet('sfx')} disabled={!hasTarget} />
             <ToolButton icon="mic" label="Record" onClick={() => openSheet('record')} disabled={!hasTarget} />
@@ -419,6 +480,8 @@ export function EditorScreen({ projectId }: { projectId: string }) {
           />
         )}
         {sheet === 'audioClip' && <AudioClipSheet open onClose={closeSheet} clipId={selectedAudioId} />}
+        {sheet === 'text' && <TextSheet open onClose={closeSheet} textId={selectedTextId} focus={textFocus} />}
+        {sheet === 'captions' && <CaptionsSheet open onClose={closeSheet} />}
         {sheet === 'volume' && <ClipVolumeSheet open onClose={closeSheet} clipIds={volumeTargets} />}
       </Suspense>
     </div>

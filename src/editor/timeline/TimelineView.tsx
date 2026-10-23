@@ -1,11 +1,14 @@
 // Canvas timeline (no per-clip DOM). The playhead is fixed at the horizontal centre; the track scrolls under it.
-// Rows: the magnetic video track, then one row per audio track in use (music, SFX, voiceover).
+// Rows: the magnetic video track, then text overlays and captions (when present), then one row per audio track in
+// use (music, SFX, voiceover). Text clips move/trim like audio clips; tapping captions selects the whole track.
 // Gestures: drag = scrub (with inertia), pinch = zoom, tap = select, drag a selected clip's handle = trim,
 // long-press a video clip = reorder, drag a selected audio clip = move. Edges snap to the playhead, cuts,
 // other audio clips and music beats.
 import { useEffect, useRef } from 'react';
 import { readFile } from '../../engine/storage/opfs';
 import { useLibrary } from '../../library/audioLibrary';
+import { type CaptionChunk, captionChunks, joinWords } from '../overlay/captions';
+import { CAPTIONS_ID, moveText, textsOf, trimText } from '../overlay/textOps';
 import { useAssets, useEditor, usePlayback } from '../store';
 import {
   AUDIO_TRACKS,
@@ -22,6 +25,7 @@ import {
   type AudioTrackKind,
   type Clip,
   type Project,
+  type TextItem,
   clipDuration,
   clipStarts,
   moveClip,
@@ -42,14 +46,21 @@ const TRACK_COLORS: Record<AudioTrackKind, { fill: string; wave: string; label: 
   voice: { fill: '#78350f', wave: '#fcd34d', label: '🎙' },
 };
 
-/** Audio rows shown: the tracks that have clips, in fixed order. */
-export function audioRows(p: Project | null): AudioTrackKind[] {
-  const clips = p ? audioClips(p) : [];
-  return AUDIO_TRACKS.filter((k) => clips.some((c) => c.track === k));
+type Lane = 'text' | 'captions' | AudioTrackKind;
+
+/** Rows under the video: text, captions, then audio tracks — only those in use, in fixed order. */
+export function laneRows(p: Project | null): Lane[] {
+  if (!p) return [];
+  const clips = audioClips(p);
+  return [
+    ...(textsOf(p).length > 0 ? (['text'] as const) : []),
+    ...((p.captions?.words.length ?? 0) > 0 ? (['captions'] as const) : []),
+    ...AUDIO_TRACKS.filter((k) => clips.some((c) => c.track === k)),
+  ];
 }
 
 export function timelineHeight(p: Project | null): number {
-  const rows = audioRows(p).length;
+  const rows = laneRows(p).length;
   return rows === 0 ? TRACK_Y + TRACK_H + 16 : AUDIO_Y + rows * (AROW_H + AROW_GAP) + 6;
 }
 const HANDLE_W = 18;
@@ -72,6 +83,8 @@ type Mode =
   | { kind: 'reorder'; from: number; to: number; x: number }
   | { kind: 'moveAudio'; clipId: string; x: number; base: AudioClip }
   | { kind: 'trimAudio'; clipId: string; edge: 'in' | 'out'; x: number; base: AudioClip; sourceDuration: number }
+  | { kind: 'moveText'; id: string; x: number; base: TextItem }
+  | { kind: 'trimText'; id: string; edge: 'in' | 'out'; x: number; base: TextItem }
   | { kind: 'pinch'; dist: number; pps: number };
 
 export type TimelineCallbacks = {
@@ -212,8 +225,8 @@ class TimelineController {
     return null;
   }
 
-  private rowY(kind: AudioTrackKind): number | null {
-    const i = audioRows(this.project).indexOf(kind);
+  private rowY(kind: Lane): number | null {
+    const i = laneRows(this.project).indexOf(kind);
     return i < 0 ? null : AUDIO_Y + i * (AROW_H + AROW_GAP);
   }
 
@@ -247,6 +260,38 @@ class TimelineController {
     return null;
   }
 
+  private textHitAt(x: number, y: number): TextItem | null {
+    const p = this.project;
+    const ry = this.rowY('text');
+    if (!p || ry === null || y < ry - 4 || y > ry + AROW_H + 4) return null;
+    const texts = textsOf(p);
+    for (let i = texts.length - 1; i >= 0; i--) {
+      const t = texts[i] as TextItem;
+      const x0 = this.xOf(t.start);
+      if (x >= x0 && x <= x0 + t.duration * this.pps) return t;
+    }
+    return null;
+  }
+
+  private textHandleAt(x: number, y: number): { edge: 'in' | 'out'; item: TextItem } | null {
+    const p = this.project;
+    const selected = useEditor.getState().selection;
+    const ry = this.rowY('text');
+    if (!p || selected.length !== 1 || ry === null || y < ry - 8 || y > ry + AROW_H + 8) return null;
+    const item = textsOf(p).find((t) => t.id === selected[0]);
+    if (!item) return null;
+    const x0 = this.xOf(item.start);
+    const x1 = x0 + item.duration * this.pps;
+    if (x >= x0 - 12 && x <= x0 + 12) return { edge: 'in', item };
+    if (x >= x1 - 12 && x <= x1 + 12) return { edge: 'out', item };
+    return null;
+  }
+
+  private captionsHitAt(y: number): boolean {
+    const ry = this.rowY('captions');
+    return ry !== null && y >= ry - 4 && y <= ry + AROW_H + 4;
+  }
+
   private beats(): number[] {
     const p = this.project;
     const items = useLibrary.getState().items;
@@ -266,6 +311,9 @@ class TimelineController {
       ...audioClips(p)
         .filter((c) => c.id !== excludeId)
         .flatMap((c) => [c.start, audioEnd(c)]),
+      ...textsOf(p)
+        .filter((t) => t.id !== excludeId)
+        .flatMap((t) => [t.start, t.start + t.duration]),
       ...this.beats(),
     ];
     const hit = nearest(points, t, SNAP_PX / this.pps);
@@ -317,8 +365,21 @@ class TimelineController {
       haptic();
       return;
     }
-    const audioHit = this.audioHitAt(pt.x, pt.y);
+    const textHandle = this.textHandleAt(pt.x, pt.y);
+    if (textHandle) {
+      useEditor.getState().beginGesture();
+      this.mode = { kind: 'trimText', id: textHandle.item.id, edge: textHandle.edge, x: pt.x, base: textHandle.item };
+      haptic();
+      return;
+    }
     const selection = useEditor.getState().selection;
+    const textHit = this.textHitAt(pt.x, pt.y);
+    if (textHit && selection.length === 1 && selection[0] === textHit.id) {
+      useEditor.getState().beginGesture();
+      this.mode = { kind: 'moveText', id: textHit.id, x: pt.x, base: textHit };
+      return;
+    }
+    const audioHit = this.audioHitAt(pt.x, pt.y);
     if (audioHit && selection.length === 1 && selection[0] === audioHit.clip.id) {
       useEditor.getState().beginGesture();
       this.mode = { kind: 'moveAudio', clipId: audioHit.clip.id, x: pt.x, base: audioHit.clip };
@@ -392,6 +453,21 @@ class TimelineController {
         useEditor.getState().apply((p) => trimAudioClip(p, m.clipId, m.edge, t, m.sourceDuration));
         break;
       }
+      case 'moveText': {
+        const len = m.base.duration;
+        let start = Math.max(0, m.base.start + (pt.x - m.x) / this.pps);
+        const s0 = this.snapTime(start, m.id);
+        const s1 = this.snapTime(start + len, m.id) - len;
+        start = Math.abs(s0 - start) <= Math.abs(s1 - start) || s1 === start ? s0 : s1;
+        useEditor.getState().apply((p) => moveText(p, m.id, start));
+        break;
+      }
+      case 'trimText': {
+        const base = m.edge === 'in' ? m.base.start : m.base.start + m.base.duration;
+        const t = this.snapTime(base + (pt.x - m.x) / this.pps, m.id);
+        useEditor.getState().apply((p) => trimText(p, m.id, m.edge, t));
+        break;
+      }
       case 'reorder': {
         const n = this.project?.main.length ?? 0;
         const to = Math.round(m.from + (pt.x - this.cx) / (BLOCK_W + BLOCK_GAP));
@@ -452,7 +528,11 @@ class TimelineController {
     if (this.pointers.size > 0) return;
 
     if (m.kind === 'pending') {
-      const id = this.audioHitAt(m.x, m.y)?.clip.id ?? this.hitAt(m.x, m.y)?.clip.id;
+      const id =
+        this.textHitAt(m.x, m.y)?.id ??
+        (this.captionsHitAt(m.y) ? CAPTIONS_ID : undefined) ??
+        this.audioHitAt(m.x, m.y)?.clip.id ??
+        this.hitAt(m.x, m.y)?.clip.id;
       const editor = useEditor.getState();
       if (!id) editor.select([]);
       else editor.select(editor.selection.length === 1 && editor.selection[0] === id ? [] : [id]);
@@ -467,7 +547,7 @@ class TimelineController {
     if (m.kind === 'trim') {
       useEditor.getState().endGesture();
       this.cb.onPeekEnd();
-    } else if (m.kind === 'moveAudio' || m.kind === 'trimAudio') {
+    } else if (m.kind === 'moveAudio' || m.kind === 'trimAudio' || m.kind === 'moveText' || m.kind === 'trimText') {
       useEditor.getState().endGesture();
     } else if (m.kind === 'reorder' && commitReorder && m.to !== m.from) {
       const editor = useEditor.getState();
@@ -533,6 +613,8 @@ class TimelineController {
     this.drawRuler(p);
     if (this.mode.kind === 'reorder') this.drawReorder(p, this.mode);
     else this.drawTrack(p);
+    this.drawTexts(p);
+    this.drawCaptions(p);
     this.drawAudio(p);
     // Playhead.
     ctx.fillStyle = '#fff';
@@ -612,7 +694,8 @@ class TimelineController {
     const { ctx } = this;
     const items = useLibrary.getState().items;
     const selected = new Set(useEditor.getState().selection);
-    for (const kind of audioRows(p)) {
+    for (const kind of laneRows(p)) {
+      if (kind === 'text' || kind === 'captions') continue;
       const y = this.rowY(kind) as number;
       const color = TRACK_COLORS[kind];
       ctx.fillStyle = '#18181b';
@@ -680,6 +763,71 @@ class TimelineController {
           if (x >= 0 && x <= this.width) ctx.fillRect(x, y + AROW_H - 5, 1, 5);
         }
       }
+    }
+  }
+
+  private drawTexts(p: Project): void {
+    const y = this.rowY('text');
+    if (y === null) return;
+    const { ctx } = this;
+    const selected = new Set(useEditor.getState().selection);
+    ctx.fillStyle = '#18181b';
+    ctx.fillRect(0, y, this.width, AROW_H);
+    for (const t of textsOf(p)) {
+      const x0 = this.xOf(t.start);
+      const w = Math.max(4, t.duration * this.pps);
+      if (x0 > this.width || x0 + w < 0) continue;
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(x0, y, w, AROW_H, 5);
+      ctx.clip();
+      ctx.fillStyle = '#9d174d';
+      ctx.fillRect(x0, y, w, AROW_H);
+      this.label(`T ${t.text.replace(/\s+/g, ' ')}`, Math.max(x0, 0) + 6, y + 9);
+      ctx.restore();
+      if (selected.has(t.id)) this.drawLaneSelection(x0, y, w, selected.size === 1);
+    }
+  }
+
+  private drawCaptions(p: Project): void {
+    const y = this.rowY('captions');
+    const c = p.captions;
+    if (y === null || !c) return;
+    const { ctx } = this;
+    const selected = useEditor.getState().selection.includes(CAPTIONS_ID);
+    ctx.fillStyle = '#18181b';
+    ctx.fillRect(0, y, this.width, AROW_H);
+    captionChunks(c).forEach((ch: CaptionChunk, k) => {
+      const x0 = this.xOf(ch.start);
+      const w = Math.max(3, (ch.end - ch.start) * this.pps - 1);
+      if (x0 > this.width || x0 + w < 0) return;
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(x0, y, w, AROW_H, 4);
+      ctx.clip();
+      ctx.fillStyle = k % 2 ? '#115e59' : '#0f766e';
+      ctx.fillRect(x0, y, w, AROW_H);
+      if (w > 24) this.label(joinWords(c.words.slice(ch.first, ch.last + 1).map((wd) => wd.text)), x0 + 4, y + 9);
+      ctx.restore();
+    });
+    if (selected) {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(1, y, this.width - 2, AROW_H);
+    }
+  }
+
+  private drawLaneSelection(x0: number, y: number, w: number, handles: boolean): void {
+    const { ctx } = this;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(x0, y, w, AROW_H, 5);
+    ctx.stroke();
+    if (handles) {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(x0, y, 6, AROW_H);
+      ctx.fillRect(x0 + w - 6, y, 6, AROW_H);
     }
   }
 
