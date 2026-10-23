@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatDuration } from '../../app/share';
 import { Sheet } from '../../app/ui/Sheet';
 import { useAssets, useEditor, usePlayback } from '../../editor/store';
+import { refitMusic, snapCutsToBeats, timelineBeats } from '../../editor/timeline/audio';
 import { type Asset, newId } from '../../editor/timeline/model';
+import { useLibrary } from '../../library/audioLibrary';
 import { getAnalyses } from './analysisClient';
 import {
   type Segment,
@@ -168,7 +170,16 @@ export function AutoCutSheet({ open, onClose }: { open: boolean; onClose(): void
   }, [phase, sources, mode, target, style]);
 
   const rampStyle: Style = mode === 'highlights' ? style : 'chill';
-  const clips = useMemo(() => segmentsToClips(sources, segments, rampStyle), [sources, segments, rampStyle]);
+  const project = useEditor((s) => s.project);
+  const library = useLibrary((s) => s.items);
+  const beats = useMemo(() => (project ? timelineBeats(project, (id) => library[id]?.beats) : []), [project, library]);
+  const [beatSync, setBeatSync] = useState(true);
+  const clips = useMemo(() => {
+    const raw = segmentsToClips(sources, segments, rampStyle);
+    if (!beatSync || beats.length < 2) return raw;
+    const assets = useAssets.getState().assets;
+    return snapCutsToBeats(raw, beats, (c) => assets[c.assetId]?.durationSec ?? c.outSec);
+  }, [sources, segments, rampStyle, beatSync, beats]);
   const sourceTotal = sources.reduce((t, s) => t + s.outSec - s.inSec, 0);
 
   const onTap = (sourceIndex: number, sec: number) => {
@@ -193,7 +204,9 @@ export function AutoCutSheet({ open, onClose }: { open: boolean; onClose(): void
   const apply = () => {
     if (clips.length === 0) return;
     const { apply: edit, select } = useEditor.getState();
-    edit((p) => ({ ...p, main: clips.map((c) => ({ id: newId(), ...c })) }));
+    const durations = Object.fromEntries(Object.values(library).map((i) => [i.id, i.durationSec]));
+    // Music laid under the old cut follows the new length (and keeps its fade-out).
+    edit((p) => refitMusic({ ...p, main: clips.map((c) => ({ id: newId(), ...c })) }, durations));
     select([]);
     usePlayback.getState().setTime(0);
     onClose();
@@ -280,6 +293,18 @@ export function AutoCutSheet({ open, onClose }: { open: boolean; onClose(): void
               Brighter = more action. Tap a white box to drop it, tap elsewhere to add that moment.
             </p>
           </div>
+
+          {beats.length >= 2 && (
+            <label className="flex min-h-11 items-center justify-between rounded-xl bg-zinc-800 px-3 text-sm">
+              <span>🎵 Cut on the beat</span>
+              <input
+                type="checkbox"
+                checked={beatSync}
+                onChange={(e) => setBeatSync(e.target.checked)}
+                className="h-5 w-5 accent-pink-500"
+              />
+            </label>
+          )}
 
           <div className="flex items-baseline justify-between text-sm">
             <span>
