@@ -1,3 +1,4 @@
+import { CAPTIONS_ID } from './overlay/textOps';
 import { create } from 'zustand';
 import type { Asset, Project } from './timeline/model';
 
@@ -25,8 +26,15 @@ type EditorState = {
   select(ids: string[]): void;
 };
 
+/** Keeps only ids that still exist: video, audio and text clips, plus the captions track. */
 function pruneSelection(selection: string[], project: Project): string[] {
-  const ids = new Set(project.main.map((c) => c.id));
+  if (selection.length === 0) return selection;
+  const ids = new Set([
+    ...project.main.map((c) => c.id),
+    ...(project.audio ?? []).map((c) => c.id),
+    ...(project.texts ?? []).map((t) => t.id),
+    ...(project.captions ? [CAPTIONS_ID] : []),
+  ]);
   return selection.filter((id) => ids.has(id));
 }
 

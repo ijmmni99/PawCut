@@ -83,6 +83,71 @@ export type Project = {
   audio?: AudioClip[];
   /** Mix settings. Missing = defaults. */
   mix?: MixSettings;
+  /** Text overlays (Phase 4). */
+  texts?: TextItem[];
+  /** Auto / manual captions (Phase 4). */
+  captions?: Captions;
+};
+
+// ---- text & captions (Phase 4). Positions are fractions of the 9:16 frame; sizes are px of a 1080-wide frame. ----
+
+export type FontId = 'montserrat' | 'poppins' | 'anton' | 'bebas' | 'bangers' | 'nunito';
+export type TextAnimIn = 'none' | 'pop' | 'typewriter' | 'bounce' | 'slide' | 'fade';
+export type TextAnimLoop = 'none' | 'bounce' | 'pulse' | 'wiggle' | 'glow';
+
+export type TextStyle = {
+  font: FontId;
+  size: number;
+  color: string;
+  /** Outline colour, or null. Width scales with size. */
+  outline: string | null;
+  shadow: boolean;
+  /** Background box colour, or null. */
+  box: string | null;
+  /** Soft glow colour, or null. */
+  glow: string | null;
+  uppercase: boolean;
+};
+
+export type TextItem = {
+  id: string;
+  text: string;
+  start: number;
+  duration: number;
+  /** Centre, 0..1 of the frame. */
+  x: number;
+  y: number;
+  scale: number;
+  /** Degrees. */
+  rotation: number;
+  style: TextStyle;
+  animIn: TextAnimIn;
+  animOut: TextAnimIn;
+  loop: TextAnimLoop;
+};
+
+export type CaptionPreset = 'wordPop' | 'karaoke' | 'boldOutline' | 'keyword';
+
+export type CaptionWord = {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  /** 'split' forces a new caption before this word; 'join' keeps it with the previous one. */
+  brk?: 'split' | 'join';
+};
+
+export type Captions = {
+  words: CaptionWord[];
+  preset: CaptionPreset;
+  position: 'top' | 'middle' | 'bottom';
+  /** Max characters per line, and lines per caption. */
+  maxChars: number;
+  lines: 1 | 2;
+  /** Append a matching emoji (😺 for cat…). */
+  emoji: boolean;
+  /** Language used for transcription (kept for re-runs). */
+  language: string;
 };
 
 export type AudioTrackKind = 'music' | 'sfx' | 'voice';
@@ -230,15 +295,17 @@ export function removeClip(project: Project, clipId: string): Project {
   );
 }
 
-/** Removes main-track and audio clips with the given ids (main track ripples). */
+/** Removes main-track, audio and text clips with the given ids (main track ripples). */
 export function removeClips(project: Project, clipIds: ReadonlySet<string>): Project {
   const audio = project.audio?.filter((c) => !clipIds.has(c.id));
+  const texts = project.texts?.filter((t) => !clipIds.has(t.id));
   return {
     ...replaceMain(
       project,
       project.main.filter((c) => !clipIds.has(c.id)),
     ),
     ...(audio ? { audio } : {}),
+    ...(texts ? { texts } : {}),
   };
 }
 
@@ -291,6 +358,10 @@ export function clipForAsset(asset: Pick<Asset, 'id' | 'durationSec'>, makeId: (
 }
 
 /** Asset ids used by the project. */
+export function textEnd(t: TextItem): number {
+  return t.start + t.duration;
+}
+
 export function referencedAssets(project: Project): Set<string> {
   return new Set(project.main.map((c) => c.assetId));
 }
