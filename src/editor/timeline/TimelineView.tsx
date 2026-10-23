@@ -254,15 +254,15 @@ class TimelineController {
   }
 
   /** Snap `t` to the playhead, a cut, another audio clip's edge or a beat, if within SNAP_PX. */
-  private snapTime(t: number, excludeId?: string): number {
+  /** `mainTrimIndex`: a main clip being trimmed — its own end and every later cut move with it, so skip them. */
+  private snapTime(t: number, excludeId?: string, mainTrimIndex?: number): number {
     const p = this.project;
     if (!p) return t;
     const starts = clipStarts(p);
     const points = [
       this.time,
       0,
-      ...starts,
-      projectDuration(p),
+      ...(mainTrimIndex === undefined ? [...starts, projectDuration(p)] : starts.slice(0, mainTrimIndex + 1)),
       ...audioClips(p)
         .filter((c) => c.id !== excludeId)
         .flatMap((c) => [c.start, audioEnd(c)]),
@@ -428,9 +428,10 @@ class TimelineController {
     } else {
       let target = base.outSec + dxSec * base.speed;
       const p = this.project;
-      const start = p ? (clipStarts(p)[p.main.findIndex((c) => c.id === m.clipId)] ?? 0) : 0;
+      const index = p ? p.main.findIndex((c) => c.id === m.clipId) : 0;
+      const start = p ? (clipStarts(p)[index] ?? 0) : 0;
       const edgeT = start + (target - base.inSec) / base.speed;
-      const snapped = this.snapTime(edgeT, m.clipId);
+      const snapped = this.snapTime(edgeT, m.clipId, index);
       if (snapped !== edgeT) target = base.inSec + (snapped - start) * base.speed;
       editor.apply((proj) => trimClip(proj, m.clipId, 'out', target, m.assetDuration));
       const clip = useEditor.getState().project?.main.find((c) => c.id === m.clipId) ?? base;
