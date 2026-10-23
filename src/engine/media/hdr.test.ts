@@ -28,15 +28,18 @@ describe('HDR → SDR', () => {
     expect(toSdr([0.2, 0.5, 0.9], 0)).toEqual([0.2, 0.5, 0.9]);
   });
 
-  it('maps HLG reference white (75%) to near-white and black to black', () => {
+  it('maps HLG reference white (75%) to a bright but not clipped white, and black to black', () => {
     const white = toSdr([0.75, 0.75, 0.75], 1);
-    for (const c of white) expect(c).toBeGreaterThan(0.9);
+    for (const c of white) {
+      expect(c).toBeGreaterThan(0.8);
+      expect(c).toBeLessThan(0.93);
+    }
     expect(toSdr([0, 0, 0], 1)).toEqual([0, 0, 0]);
   });
 
   it('maps PQ 203 nits to near-white and never exceeds 1', () => {
     // PQ code value for 203 nits ≈ 0.58
-    for (const c of toSdr([0.58, 0.58, 0.58], 2)) expect(c).toBeGreaterThan(0.9);
+    for (const c of toSdr([0.58, 0.58, 0.58], 2)) expect(c).toBeGreaterThan(0.8);
     for (const c of toSdr([1, 1, 1], 2)) expect(c).toBeLessThanOrEqual(1);
   });
 
@@ -47,9 +50,17 @@ describe('HDR → SDR', () => {
     expect(out[0] - out[2]).toBeGreaterThan(raw[0] - raw[2]);
   });
 
-  it('keeps mid-greys mid-grey (no blown-out picture)', () => {
+  it('keeps mid-greys near SDR mid-grey (not overexposed)', () => {
+    // HLG 50% is a mid-grey scene; SDR 18% grey encodes to ≈0.46 in sRGB.
     const mid = toSdr([0.5, 0.5, 0.5], 1)[0];
-    expect(mid).toBeGreaterThan(0.45);
-    expect(mid).toBeLessThan(0.85);
+    expect(mid).toBeGreaterThan(0.4);
+    expect(mid).toBeLessThan(0.52);
+  });
+
+  it('keeps highlight detail: brighter HDR stays brighter instead of clipping', () => {
+    const a = toSdr([0.8, 0.8, 0.8], 1)[0];
+    const b = toSdr([0.9, 0.9, 0.9], 1)[0];
+    expect(b).toBeGreaterThan(a + 0.02);
+    expect(b).toBeLessThan(1);
   });
 });

@@ -49,7 +49,7 @@ test('HLG footage is tone-mapped, not washed out', async ({ page }, info) => {
     const w = window as unknown as { __pawcut: { assets: { getState(): { assets: Record<string, { proxyPath: string; proxyVersion?: number; prepStats?: { scaler: string } }> } } } };
     return Object.values(w.__pawcut.assets.getState().assets)[0];
   });
-  expect(asset?.proxyVersion).toBe(3);
+  expect(asset?.proxyVersion).toBe(4);
 
   const proxyFile = info.outputPath('proxy.mp4');
   (await import('node:fs')).writeFileSync(proxyFile, await readOpfs(page, asset?.proxyPath ?? ''));

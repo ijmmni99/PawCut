@@ -3,7 +3,7 @@
 // The same math exists twice: GLSL for the renderers and TypeScript for unit tests. Keep them in step.
 //
 // Pipeline per pixel: decode transfer → linear light relative to SDR reference white (203 nits = 1.0)
-// → BT.2020 → BT.709 primaries → soft-knee highlight roll-off on the brightest channel → sRGB encode.
+// → BT.2020 → BT.709 primaries → exposure 0.75 → soft-knee highlight roll-off on the brightest channel → sRGB.
 
 /** 0 = SDR (pass-through), 1 = HLG, 2 = PQ. */
 export type TransferCode = 0 | 1 | 2;
@@ -87,8 +87,14 @@ export async function trackTransfer(track: ColorTrack): Promise<TransferCode> {
 
 /** Peak of HLG/PQ masters relative to SDR reference white: 1000 nits / 203 nits. */
 const PEAK = 1000 / 203;
-/** Below this (relative to reference white) values pass unchanged; above it they roll off towards PEAK. */
-const KNEE = 0.75;
+/**
+ * Overall exposure after decoding. 1.0 puts HLG reference white at full SDR white and lifts midtones ~15%, which
+ * looked overexposed next to Photos on iPhone; 0.75 (≈ −0.4 stop) lands mid-grey near SDR's 18% and white ≈ 225.
+ */
+const EXPOSURE = 0.75;
+/** Below this (linear, after exposure) values pass unchanged; above it they roll off towards the scaled peak. */
+const KNEE = 0.6;
+const TOP = PEAK * EXPOSURE;
 
 export const TONEMAP_GLSL = `
 vec3 hlgToLinear(vec3 e) {
@@ -116,10 +122,11 @@ vec3 toSdr(vec3 e, int transfer) {
   if (transfer == 0) return e;
   vec3 lin = transfer == 1 ? hlgToLinear(e) : pqToLinear(e);
   lin = max(mat3(1.6605, -0.1246, -0.0182, -0.5876, 1.1329, -0.1006, -0.0728, -0.0083, 1.1187) * lin, 0.0);
+  lin *= ${EXPOSURE.toFixed(4)};
   float m = max(max(lin.r, lin.g), lin.b);
   if (m > ${KNEE.toFixed(4)}) {
     float k = ${KNEE.toFixed(4)};
-    float t = (m - k) / (${PEAK.toFixed(6)} - k);
+    float t = (m - k) / (${TOP.toFixed(6)} - k);
     float rolled = k + (1.0 - k) * (1.0 - exp(-3.0 * t)) / (1.0 - exp(-3.0));
     lin *= rolled / m;
   }
@@ -158,13 +165,13 @@ export function toSdr(e: RGB, transfer: TransferCode): RGB {
   if (transfer === 0) return e;
   const l = transfer === 1 ? hlgToLinear(e) : pqToLinear(e);
   let lin: RGB = [
-    Math.max(1.6605 * l[0] - 0.5876 * l[1] - 0.0728 * l[2], 0),
-    Math.max(-0.1246 * l[0] + 1.1329 * l[1] - 0.0083 * l[2], 0),
-    Math.max(-0.0182 * l[0] - 0.1006 * l[1] + 1.1187 * l[2], 0),
+    Math.max(1.6605 * l[0] - 0.5876 * l[1] - 0.0728 * l[2], 0) * EXPOSURE,
+    Math.max(-0.1246 * l[0] + 1.1329 * l[1] - 0.0083 * l[2], 0) * EXPOSURE,
+    Math.max(-0.0182 * l[0] - 0.1006 * l[1] + 1.1187 * l[2], 0) * EXPOSURE,
   ];
   const m = Math.max(...lin);
   if (m > KNEE) {
-    const t = (m - KNEE) / (PEAK - KNEE);
+    const t = (m - KNEE) / (TOP - KNEE);
     const rolled = KNEE + ((1 - KNEE) * (1 - Math.exp(-3 * t))) / (1 - Math.exp(-3));
     lin = lin.map((v) => (v * rolled) / m) as RGB;
   }

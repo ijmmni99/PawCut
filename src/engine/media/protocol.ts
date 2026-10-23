@@ -1,8 +1,8 @@
 import type { AssetColor, PrepStats } from '../../editor/timeline/model';
 import type { CodecProfile } from '../codecProfile';
 
-/** Bump when proxies must be rebuilt (2/3 = HDR tone-mapped; 3 also trusts track colour metadata). Older HDR proxies are rebuilt on launch. */
-export const PROXY_VERSION = 3;
+/** Bump when proxies must be rebuilt (2/3 = HDR tone-mapped; 3 trusts track colour metadata; 4 = lower exposure). Older HDR proxies are rebuilt on launch. */
+export const PROXY_VERSION = 4;
 
 export type ImportRequest = {
   type: 'import';

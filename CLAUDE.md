@@ -59,13 +59,14 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - MediaPipe runtime is copied from node_modules to `public/mediapipe/` by `scripts/copy-mediapipe.mjs` (pre-dev /
   pre-build, gitignored); model committed in `public/models/`. Both runtime-cached by the SW, not precached.
 - **HDR** `src/engine/media/hdr.ts` — iPhone HLG/PQ BT.2020 → SDR BT.709 in GLSL (`TONEMAP_GLSL`, mirrored in TS for
-  tests): decode transfer → linear (203 nits = 1.0) → BT.2020→709 → soft knee at 0.75 → sRGB. Used by the preview
+  tests): decode transfer → linear (203 nits = 1.0) → BT.2020→709 → exposure 0.75 → soft knee at 0.6 → sRGB
+  (exposure tuned against iPhone Photos: 1.0 looked overexposed). Used by the preview
   compositor (originals shown before the proxy exists), the proxy scaler (forces the WebGL scaler for HDR) and
   export (HDR clips render through a WebGL contain-scaler instead of CanvasSink). `hdrUploadIsRaw()` probes once
   per thread with a synthetic 10-bit HLG frame whether the browser already converts HDR on WebGL upload
   (Chromium does, for 10-bit only) — then the shader passes through to avoid double conversion. Safari may not
   label decoded frames, so the transfer falls back to the track's colour metadata (`trackTransfer`, colr/VUI);
-  `asset.color` records it (Diagnostics). Proxies are versioned (`PROXY_VERSION` = 3); older ones are rebuilt in
+  `asset.color` records it (Diagnostics). Proxies are versioned (`PROXY_VERSION` = 4); older ones are rebuilt in
   the background on launch (only if the source is HDR).
 - Phase 0 spike lives on as Diagnostics (`#/diagnostics`, gear icon on projects screen): build version
   (`__APP_VERSION__` = commit · build time), Check for updates, recent imports, device report.
