@@ -26,4 +26,7 @@ ffmpeg -v error -y \
 ffmpeg -v error -y -f lavfi -i "color=c=0xBFBFBF:size=360x640:rate=30:duration=3" -f lavfi -i "sine=frequency=500:sample_rate=48000:duration=3" \
   -pix_fmt yuv420p10le -color_primaries bt2020 -color_trc arib-std-b67 -colorspace bt2020nc \
   -c:v libvpx-vp9 -profile:v 2 -deadline realtime -cpu-used 8 -b:v 1M -c:a libopus "$out/hlg.mp4"
+# Music: 30s at 120 BPM (a kick every 0.5s over a soft 220 Hz bed), mp3 — for library import, BPM and mix tests.
+ffmpeg -v error -y -f lavfi -i "aevalsrc='0.15*sin(2*PI*220*t)+0.8*exp(-mod(t,0.5)*30)*sin(2*PI*70*t)':s=44100:d=30" \
+  -ac 2 -c:a libmp3lame -b:a 128k "$out/music.mp3"
 echo "fixtures written to $out"
