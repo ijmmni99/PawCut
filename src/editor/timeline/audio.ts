@@ -5,6 +5,7 @@ import {
   type AudioTrackKind,
   type Clip,
   DEFAULT_MIX,
+  type Loudness,
   type MixSettings,
   type Project,
   clipDuration,
@@ -117,8 +118,6 @@ const DUCK_RELEASE = 0.5;
 /** Video sound louder than this (dBFS, after clip volume) counts as "someone talking". */
 const LOUD_DB = -30;
 
-/** Loudness of a video asset's audio: dBFS per `step` seconds of source. */
-export type Loudness = { step: number; db: number[] };
 
 /**
  * Music gain multiplier per DUCK_STEP of timeline time: 1 normally, dropping to duckDb while a voiceover plays or

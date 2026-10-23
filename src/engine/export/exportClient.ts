@@ -54,6 +54,6 @@ export function startRender(
       finish();
     };
   });
-  worker.postMessage(request);
+  worker.postMessage(request, request.overlay?.map((c) => c.buffer as ArrayBuffer) ?? []);
   return { cancel: () => worker.postMessage({ type: 'cancel' }), done };
 }

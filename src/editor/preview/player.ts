@@ -3,6 +3,9 @@
 // frame to show each animation frame. Because frames after a cut are decoded before the cut is reached, cuts are
 // seamless (no element switching or play() start-up latency, which is what made <video>-based cuts stutter on iOS).
 // While paused, scrubbing requests single stills; the worker only decodes the latest request.
+import { scheduleOverlay } from '../../engine/audio/overlay';
+import { getAudioBuffer } from '../../library/audioLibrary';
+import { audioClips, duckEnvelope } from '../timeline/audio';
 import { useAssets, useEditor, usePlayback } from '../store';
 import { locate, projectDuration } from '../timeline/model';
 import { type Compositor, type FrameSource, createCompositor } from './compositor';
@@ -51,12 +54,15 @@ export class PreviewPlayer {
   private consumed = 0;
   private lastAck = 0;
   private raf = 0;
+  /** Decoded music / SFX / voice, loaded ahead of time so playback can start instantly. */
+  private readonly audioBuffers = new Map<string, AudioBuffer>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.compositor = createCompositor(canvas);
     this.worker = new Worker(new URL('./preview.worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (e: MessageEvent<PreviewEvent>) => this.onEvent(e.data);
     this.sync();
+    this.preloadAudio();
 
     this.unsubscribers.push(
       usePlayback.subscribe((s, prev) => {
@@ -65,6 +71,7 @@ export class PreviewPlayer {
       useEditor.subscribe((s, prev) => {
         if (s.project === prev.project) return;
         this.sync();
+        this.preloadAudio();
         if (this.state !== 'paused') this.pause();
         this.clampTime();
         this.showTime(usePlayback.getState().time);
@@ -79,6 +86,23 @@ export class PreviewPlayer {
 
   private send(msg: PreviewRequest): void {
     this.worker.postMessage(msg);
+  }
+
+  private preloadAudio(): void {
+    const project = useEditor.getState().project;
+    if (!project) return;
+    for (const clip of audioClips(project)) {
+      if (this.audioBuffers.has(clip.sourceId)) continue;
+      void getAudioBuffer(clip.sourceId).then(
+        (b) => this.audioBuffers.set(clip.sourceId, b),
+        () => undefined,
+      );
+    }
+  }
+
+  /** Silences all output (e.g. while recording a voiceover, so the mic doesn't pick it up). */
+  setOutputMuted(muted: boolean): void {
+    if (this.master) this.master.gain.value = muted ? 0 : 1;
   }
 
   private sync(): void {
@@ -212,6 +236,27 @@ export class PreviewPlayer {
     this.ctxStart = this.ctx.currentTime + START_LEAD_SEC;
     for (const chunk of this.pendingAudio) this.schedule(chunk);
     this.pendingAudio = [];
+    this.scheduleTracks();
+  }
+
+  /** Music / SFX / voiceover for this playback run (same scheduling as export). */
+  private scheduleTracks(): void {
+    const project = useEditor.getState().project;
+    if (!project || !this.ctx || !this.master) return;
+    const assets = useAssets.getState().assets;
+    const loudness = Object.fromEntries(Object.values(assets).map((a) => [a.id, a.loudness]));
+    const nodes = scheduleOverlay(
+      this.ctx,
+      this.master,
+      { project, buffers: this.audioBuffers, duck: duckEnvelope(project, loudness) },
+      this.from,
+      this.ctxStart,
+      projectDuration(project),
+    );
+    for (const node of nodes) {
+      this.nodes.add(node);
+      node.onended = () => this.nodes.delete(node);
+    }
   }
 
   private schedule(chunk: AudioChunk): void {
@@ -225,7 +270,12 @@ export class PreviewPlayer {
     node.buffer = buffer;
     // Pitch follows speed, matching the export resampler.
     node.playbackRate.value = chunk.speed;
-    node.connect(master);
+    if (chunk.volume === 1) node.connect(master);
+    else {
+      const gain = ctx.createGain();
+      gain.gain.value = chunk.volume;
+      node.connect(gain).connect(master);
+    }
     const when = this.ctxStart + (chunk.t - this.from);
     const now = ctx.currentTime;
     if (when >= now) node.start(when);

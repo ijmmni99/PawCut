@@ -3,7 +3,11 @@ import { downloadFile, formatBytes, formatDuration, shareFile } from '../app/sha
 import { Sheet } from '../app/ui/Sheet';
 import { codecProfile } from '../engine/codecProfile';
 import { type ExportHandle, startRender } from '../engine/export/exportClient';
-import { TIKTOK_1080P30 } from '../engine/export/protocol';
+import { type RenderEvent, TIKTOK_1080P30 } from '../engine/export/protocol';
+import { renderOverlay } from '../engine/audio/overlay';
+import { getAudioBuffer } from '../library/audioLibrary';
+import { audioClips, duckEnvelope } from './timeline/audio';
+import { projectDuration } from './timeline/model';
 import { readFile } from '../engine/storage/opfs';
 import { holdWakeLock } from '../engine/wakeLock';
 import { useAssets, useEditor } from './store';
@@ -37,7 +41,7 @@ export function ExportSheet({ open, onClose }: { open: boolean; onClose(): void 
     const lock = holdWakeLock();
     const preset = { ...TIKTOK_1080P30, videoCodec: codecProfile.video, audioCodec: codecProfile.audio };
     let alive = true;
-    handle.current = startRender({ type: 'start', project, assets, preset }, (e) => {
+    const onEvent = (e: RenderEvent) => {
       if (!alive) return;
       switch (e.type) {
         case 'progress':
@@ -63,6 +67,29 @@ export function ExportSheet({ open, onClose }: { open: boolean; onClose(): void 
           onClose();
           break;
       }
+    };
+    // Music / SFX / voice are mixed with Web Audio here (same scheduling as preview), then handed to the worker.
+    void (async () => {
+      let overlay: Float32Array[] | null = null;
+      const clips = audioClips(project);
+      if (clips.length > 0) {
+        const buffers = new Map<string, AudioBuffer>();
+        for (const id of new Set(clips.map((c) => c.sourceId))) {
+          const buffer = await getAudioBuffer(id).catch(() => null);
+          if (buffer) buffers.set(id, buffer);
+        }
+        const loudness = Object.fromEntries(Object.values(assets).map((a) => [a.id, a.loudness]));
+        overlay = await renderOverlay(
+          { project, buffers, duck: duckEnvelope(project, loudness) },
+          projectDuration(project),
+          preset.sampleRate,
+        );
+      }
+      if (!alive) return;
+      handle.current = startRender({ type: 'start', project, assets, preset, overlay }, onEvent);
+    })().catch((err: unknown) => {
+      lock.release();
+      if (alive) setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
     });
     return () => {
       alive = false;

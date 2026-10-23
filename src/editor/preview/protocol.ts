@@ -13,7 +13,7 @@ export type PreviewRequest =
 
 export type PreviewEvent =
   | { type: 'frame'; gen: number; t: number; frame: VideoFrame; rotation: number; transfer: TransferCode }
-  | { type: 'audio'; gen: number; t: number; speed: number; sampleRate: number; channels: Float32Array[] }
+  | { type: 'audio'; gen: number; t: number; speed: number; volume: number; sampleRate: number; channels: Float32Array[] }
   | { type: 'end'; gen: number }
   | { type: 'error'; gen: number; message: string }
   | { type: 'still'; id: number; frame: VideoFrame | null; rotation: number; transfer: TransferCode };

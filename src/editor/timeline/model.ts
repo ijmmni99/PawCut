@@ -31,9 +31,14 @@ export type Asset = {
   color?: AssetColor;
   /** Proxy generation the files were built with (see PROXY_VERSION). Missing = 1. */
   proxyVersion?: number;
+  /** Loudness of the clip's own sound over time (drives music ducking). Missing until measured. */
+  loudness?: Loudness;
   /** How long preparing the proxy took, per stage (shown in Diagnostics to tune import speed). */
   prepStats?: PrepStats | null;
 };
+
+/** Loudness of an asset's audio: dBFS per `step` seconds of source. */
+export type Loudness = { step: number; db: number[] };
 
 export type AssetColor = { primaries: string | null; transfer: string | null; hdr: boolean };
 

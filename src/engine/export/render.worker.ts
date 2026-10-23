@@ -80,9 +80,11 @@ async function addClipAudio(
   firstFrame: number,
   frameCount: number,
   rate: number,
+  overlay: Float32Array[] | null,
 ): Promise<void> {
   const out = Array.from({ length: CHANNELS }, () => new Float32Array(frameCount));
-  if (track) {
+  const volume = clip.volume ?? 1;
+  if (track && volume > 0) {
     const sink = new AudioSampleSink(track);
     const windowFrames = AUDIO_WINDOW_SEC * rate;
     for (let w = 0; w < frameCount; w += windowFrames) {
@@ -95,6 +97,16 @@ async function addClipAudio(
       if (pcm) renderSpeedResampled(pcm, out, w, frames, rate, srcStart, clip.speed);
     }
     applyEdgeFades(out, 0, frameCount, Math.round(FADE_SEC * rate));
+    if (volume !== 1) for (const ch of out) for (let i = 0; i < frameCount; i++) ch[i] = (ch[i] as number) * volume;
+  }
+  // Add the pre-mixed music / SFX / voice for this stretch of the timeline.
+  if (overlay) {
+    for (let c = 0; c < CHANNELS; c++) {
+      const src = overlay[c] ?? overlay[0];
+      const dst = out[c] as Float32Array;
+      if (!src) continue;
+      for (let i = 0; i < frameCount; i++) dst[i] = (dst[i] as number) + (src[firstFrame + i] ?? 0);
+    }
   }
   // Hand the encoder 1s chunks of planar f32.
   for (let off = 0; off < frameCount; off += rate) {
@@ -154,7 +166,12 @@ async function clipFrames(
   })();
 }
 
-async function render(project: Project, assets: Record<string, Asset>, preset: ExportPreset): Promise<void> {
+async function render(
+  project: Project,
+  assets: Record<string, Asset>,
+  preset: ExportPreset,
+  overlay: Float32Array[] | null,
+): Promise<void> {
   const started = performance.now();
   const { width, height, frameRate: fps, sampleRate: rate } = preset;
   const totalSec = project.main.reduce((s, c) => s + clipDuration(c), 0);
@@ -205,7 +222,7 @@ async function render(project: Project, assets: Record<string, Asset>, preset: E
       if (!videoTrack) throw new Error('A clip has no video track.');
 
       // Audio for the clip goes in first; it's small once encoded and keeps the muxer interleaving simple.
-      await addClipAudio(audio, audioTrack, clip, firstSample, sampleCount, rate);
+      await addClipAudio(audio, audioTrack, clip, firstSample, sampleCount, rate, overlay);
 
       // Sample mid-frame so rounding never lands just before the intended source frame.
       const times = function* () {
@@ -251,7 +268,7 @@ self.onmessage = (e: MessageEvent<RenderRequest>) => {
     return;
   }
   canceled = false;
-  render(msg.project, msg.assets, msg.preset).catch((err: unknown) => {
+  render(msg.project, msg.assets, msg.preset, msg.overlay).catch((err: unknown) => {
     if (err instanceof CanceledError) post({ type: 'canceled' });
     else post({ type: 'error', message: err instanceof Error ? err.message : String(err) });
   });

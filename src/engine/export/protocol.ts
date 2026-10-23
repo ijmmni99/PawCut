@@ -73,6 +73,8 @@ export type RenderRequest =
       project: import('../../editor/timeline/model').Project;
       assets: Record<string, import('../../editor/timeline/model').Asset>;
       preset: ExportPreset;
+      /** Music / SFX / voiceover pre-mixed on the main thread (Web Audio), 48 kHz stereo planar, timeline-aligned. */
+      overlay: Float32Array[] | null;
     }
   | { type: 'cancel' };
 

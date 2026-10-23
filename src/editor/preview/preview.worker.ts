@@ -204,7 +204,7 @@ async function streamAudio(myGen: number, from: number): Promise<void> {
     const input = await inputFor(clip.assetId);
     const track = await input?.getPrimaryAudioTrack();
     if (myGen !== gen) return;
-    if (!track) continue;
+    if (!track || (clip.volume ?? 1) <= 0) continue;
     const srcFrom = clip.inSec + Math.max(0, from - start) * clip.speed;
     const sink = new AudioSampleSink(track);
     let pending: Float32Array[][] = [];
@@ -223,7 +223,7 @@ async function streamAudio(myGen: number, from: number): Promise<void> {
       }
       const t = start + (pendingStart - clip.inSec) / clip.speed;
       post(
-        { type: 'audio', gen: myGen, t, speed: clip.speed, sampleRate: rate, channels },
+        { type: 'audio', gen: myGen, t, speed: clip.speed, volume: clip.volume ?? 1, sampleRate: rate, channels },
         channels.map((c) => c.buffer as ArrayBuffer),
       );
       pending = [];
