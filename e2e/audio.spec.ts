@@ -41,6 +41,17 @@ test('music library → use → sfx → export', async ({ page }, info) => {
       { timeout: 300_000 },
     )
     .toBe(true);
+  // The video's own sound is measured for ducking.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const w = window as unknown as { __pawcut: { assets: { getState(): { assets: Record<string, { loudness?: { db: number[] } }> } } } };
+          return Object.values(w.__pawcut.assets.getState().assets)[0]?.loudness?.db.length ?? 0;
+        }),
+      { timeout: 60_000 },
+    )
+    .toBeGreaterThan(10);
 
   // Import a track into the library; tempo is detected.
   await page.getByRole('button', { name: 'Music' }).click();

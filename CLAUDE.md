@@ -56,6 +56,17 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   ≥0.1, score ≥0.3), grows segments (Chill 2–4s, Hype 0.8–1.8s), pads with lead-in/out before unrelated footage,
   and builds clips (Hype: top 2 segments become 1.5×→0.5×→1.5× stepped ramps). Modes: Highlights / Remove dead air
   / Cut silences. Apply replaces the main track in one undo step.
+- **Audio (Phase 3)** — `Project.audio: AudioClip[]` (music / sfx / voice, freely positioned, own volume + fades),
+  `Project.mix` (ducking on/off, depth). Pure ops + duck envelope + beat snapping in `src/editor/timeline/audio.ts`.
+  Library = Dexie `library` + OPFS `audio/` (`src/library/audioLibrary.ts`): imported music analysed on import
+  (`src/engine/audio/analysis.ts`: waveform peaks, BPM + beat grid via onset autocorrelation), built-in SFX are
+  procedural (`sfx.ts`, rendered once to WAV, `SFX_VERSION`), voiceovers via MediaRecorder. Zip backup/restore
+  (`backup.ts`, fflate). `scheduleOverlay` (`src/engine/audio/overlay.ts`) is the ONE mix of music/SFX/voice: preview
+  runs it on the live AudioContext, export pre-renders it on an OfflineAudioContext and the render worker adds it
+  to the clips' own sound. Ducking: voice clips + loud video sound (`asset.loudness`, dB per 0.1s measured from the
+  proxy by the import worker, backfilled on launch; loud = > −30 dBFS and > clip median + 8 dB), 0.15s attack /
+  0.5s release. Timeline draws one row per audio track under the video; trims snap to cuts/playhead/beats.
+  Auto-Cut "Cut on the beat" nudges cuts to the music's beats (`snapCutsToBeats`) and refits music after Apply.
 - MediaPipe runtime is copied from node_modules to `public/mediapipe/` by `scripts/copy-mediapipe.mjs` (pre-dev /
   pre-build, gitignored); model committed in `public/models/`. Both runtime-cached by the SW, not precached.
 - **HDR** `src/engine/media/hdr.ts` — iPhone HLG/PQ BT.2020 → SDR BT.709 in GLSL (`TONEMAP_GLSL`, mirrored in TS for
@@ -87,7 +98,9 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - Horizontal clips are letterboxed (`contain`) for now; blurred-background fill comes with the compositor work.
 - Removed clips' media stays in OPFS (undo can restore them); assets are garbage-collected when a project is deleted.
 - Detector assets are self-hosted: Google's model bucket sends no CORS headers, which COEP `require-corp` blocks.
-- Beat sync and punch-zoom for Hype wait for Music (Phase 3) and keyframes (Phase 5).
+- Punch-zoom for Hype waits for keyframes (Phase 5).
+- Built-in SFX are synthesised (no samples to license). Noise reduction and "extract audio from video" are deferred.
+- Music only auto-refits on Use and after Auto-Cut Apply; later main-track edits leave it where it is.
 - Proxy scaling is benchmarked per device rather than hard-coded: on GPU-less Chromium WebGL readback is the slowest
   option, on iPhone the 2D canvas path (old Mediabunny resize) made "Preparing" very slow on 4K footage.
 - e2e runs with `workers: 1`: media tests in parallel starve each other and skew the smoothness checks.
