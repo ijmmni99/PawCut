@@ -117,6 +117,13 @@ const DUCK_ATTACK = 0.15;
 const DUCK_RELEASE = 0.5;
 /** Video sound louder than this (dBFS, after clip volume) counts as "someone talking". */
 const LOUD_DB = -30;
+/** ...and this far above the clip's typical level, so steady background noise (wind, traffic) doesn't hold music down. */
+const LOUD_ABOVE_MEDIAN_DB = 8;
+
+function medianDb(db: number[]): number {
+  const sorted = db.filter((d) => d > -100).sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] ?? -100;
+}
 
 
 /**
@@ -141,10 +148,11 @@ export function duckEnvelope(p: Project, loudness: Record<string, Loudness | und
     if (!loud || vol <= 0) return;
     const start = starts[k] ?? 0;
     const volDb = 20 * Math.log10(vol);
+    const threshold = Math.max(LOUD_DB - volDb, medianDb(loud.db) + LOUD_ABOVE_MEDIAN_DB);
     for (let i = Math.floor(start / DUCK_STEP); i < Math.min(n, Math.ceil((start + clipDuration(clip)) / DUCK_STEP)); i++) {
       const src = clip.inSec + (i * DUCK_STEP - start) * clip.speed;
       const db = loud.db[Math.floor(src / loud.step)];
-      if (db !== undefined && db + volDb > LOUD_DB) active[i] = 1;
+      if (db !== undefined && db > threshold) active[i] = 1;
     }
   });
   const low = 10 ** (mix.duckDb / 20);

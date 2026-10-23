@@ -19,9 +19,17 @@ import type { PrepStats } from '../../editor/timeline/model';
 import type { CodecProfile } from '../codecProfile';
 import { assetDir, readFile } from '../storage/opfs';
 import { copyBlobToOpfs, createOpfsTarget, writeBlobToOpfs } from '../storage/opfsWriter';
+import { measureLoudness } from '../audio/loudness';
 import { trackTransfer } from './hdr';
 import { AdaptiveScaler } from './scaler';
-import { PROXY_VERSION, type ImportEvent, ImportRequest, ProbeResult, ProxyResult } from './protocol';
+import {
+  PROXY_VERSION,
+  type ImportEvent,
+  type ImportRequest,
+  type ImportWorkerRequest,
+  type ProbeResult,
+  type ProxyResult,
+} from './protocol';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -275,6 +283,7 @@ async function prepare({ job, input, info, copyMs }: Probed): Promise<void> {
     );
     proxy.prepStats.copyMs = Math.round(copyMs);
     post({ type: 'ready', assetId: job.assetId, proxy, upgrade: job.upgrade === true });
+    if (!job.upgrade) await postLoudness(job.assetId, proxy.proxyPath);
   } catch (err) {
     post({ type: 'error', assetId: job.assetId, message: errorMessage(err), probed: true });
   } finally {
@@ -282,12 +291,24 @@ async function prepare({ job, input, info, copyMs }: Probed): Promise<void> {
   }
 }
 
+async function postLoudness(assetId: string, proxyPath: string): Promise<void> {
+  try {
+    post({ type: 'loudness', assetId, loudness: await measureLoudness(await readFile(proxyPath)) });
+  } catch (err) {
+    console.warn('loudness failed', assetId, err);
+  }
+}
+
 // Two serial queues: every file is copied + probed as soon as it arrives (clips show up immediately, in order),
 // while proxies are built one at a time (decoding several 4K files at once exhausts iOS memory).
 let probeQueue = Promise.resolve();
 let prepareQueue = Promise.resolve();
-self.onmessage = (e: MessageEvent<ImportRequest>) => {
+self.onmessage = (e: MessageEvent<ImportWorkerRequest>) => {
   const job = e.data;
+  if (job.type === 'loudness') {
+    prepareQueue = prepareQueue.then(() => postLoudness(job.assetId, job.proxyPath));
+    return;
+  }
   probeQueue = probeQueue.then(async () => {
     const probed = await copyAndProbe(job);
     if (probed) prepareQueue = prepareQueue.then(() => prepare(probed));

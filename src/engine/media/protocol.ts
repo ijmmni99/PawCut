@@ -1,4 +1,4 @@
-import type { AssetColor, PrepStats } from '../../editor/timeline/model';
+import type { AssetColor, Loudness, PrepStats } from '../../editor/timeline/model';
 import type { CodecProfile } from '../codecProfile';
 
 /** Bump when proxies must be rebuilt (2/3 = HDR tone-mapped; 3 trusts track colour metadata; 4 = lower exposure). Older HDR proxies are rebuilt on launch. */
@@ -13,6 +13,11 @@ export type ImportRequest = {
   /** Rebuild an existing asset's proxy if (and only if) its source is HDR. */
   upgrade?: boolean;
 };
+
+/** Measure the sound of an existing proxy (assets imported before loudness existed). */
+export type LoudnessRequest = { type: 'loudness'; assetId: string; proxyPath: string };
+
+export type ImportWorkerRequest = ImportRequest | LoudnessRequest;
 
 export type ProbeResult = {
   durationSec: number;
@@ -40,4 +45,6 @@ export type ImportEvent =
   | { type: 'ready'; assetId: string; proxy: ProxyResult; upgrade: boolean }
   /** An upgrade request found nothing to redo (SDR source). */
   | { type: 'unchanged'; assetId: string }
-  | { type: 'error'; assetId: string; message: string; probed: boolean };
+  | { type: 'error'; assetId: string; message: string; probed: boolean }
+  /** Null loudness = the clip has no sound. */
+  | { type: 'loudness'; assetId: string; loudness: Loudness | null };

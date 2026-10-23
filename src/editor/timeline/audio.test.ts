@@ -89,6 +89,8 @@ describe('ducking', () => {
     expect(envelopeAt(duckEnvelope(p, loud), 1.4)).toBeLessThan(0.5);
     const muted = { ...p, main: p.main.map((c) => ({ ...c, volume: 0 })) };
     expect(envelopeAt(duckEnvelope(muted, loud), 1.4)).toBe(1);
+    const noisy = { a0: { step: 0.5, db: [-22, -21, -22, -20, -22, -21, -22, -21] } };
+    expect(envelopeAt(duckEnvelope(p, noisy), 1.4)).toBe(1);
   });
 });
 

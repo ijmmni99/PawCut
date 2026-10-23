@@ -7,7 +7,7 @@ import { db } from '../../library/db';
 import { appendAssetClip } from '../../library/projects';
 import { codecProfile } from '../codecProfile';
 import { removeEntry } from '../storage/opfs';
-import { PROXY_VERSION, type ImportEvent, type ImportRequest } from './protocol';
+import { PROXY_VERSION, type ImportEvent, type ImportRequest, type LoudnessRequest } from './protocol';
 
 let worker: Worker | null = null;
 const targets = new Map<string, string>(); // assetId -> projectId
@@ -55,6 +55,9 @@ async function handle(e: ImportEvent): Promise<void> {
     }
     case 'unchanged':
       await patchAsset(e.assetId, { proxyVersion: PROXY_VERSION, progress: 1 });
+      break;
+    case 'loudness':
+      await patchAsset(e.assetId, { loudness: e.loudness ?? { step: 0.1, db: [] } });
       break;
     case 'error':
       targets.delete(e.assetId);
@@ -148,4 +151,13 @@ export async function retryImport(assetId: string): Promise<void> {
     profile: codecProfile,
   };
   getWorker().postMessage(request);
+}
+
+/** Measures the sound of ready assets imported before loudness existed (drives music ducking), in the background. */
+export async function backfillLoudness(): Promise<void> {
+  const missing = (await db.assets.toArray()).filter((a) => a.status === 'ready' && a.proxyPath && !a.loudness);
+  for (const a of missing) {
+    const request: LoudnessRequest = { type: 'loudness', assetId: a.id, proxyPath: a.proxyPath as string };
+    getWorker().postMessage(request);
+  }
 }
