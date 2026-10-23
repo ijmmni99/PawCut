@@ -75,6 +75,8 @@ export type RenderRequest =
       preset: ExportPreset;
       /** Music / SFX / voiceover pre-mixed on the main thread (Web Audio), 48 kHz stereo planar, timeline-aligned. */
       overlay: Float32Array[] | null;
+      /** Text/caption sprites rasterised on the main thread (fonts), keyed like the overlay plan. */
+      sprites?: Array<{ key: string; bitmap: ImageBitmap; meta: import('../../editor/overlay/plan').SpriteMeta }>;
     }
   | { type: 'cancel' };
 

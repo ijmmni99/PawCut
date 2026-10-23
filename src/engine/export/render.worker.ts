@@ -18,6 +18,8 @@ import {
   Quality,
   VideoSampleSink,
 } from 'mediabunny';
+import { type SpriteImage, drawOps } from '../../editor/overlay/draw';
+import { FRAME_W, buildPlan, layoutAt } from '../../editor/overlay/plan';
 import { type Asset, type Clip, type Project, clipDuration } from '../../editor/timeline/model';
 import { type Pcm, applyEdgeFades, renderSpeedResampled } from '../audio/resample';
 import { trackTransfer } from '../media/hdr';
@@ -171,6 +173,7 @@ async function render(
   assets: Record<string, Asset>,
   preset: ExportPreset,
   overlay: Float32Array[] | null,
+  sprites: Map<string, SpriteImage>,
 ): Promise<void> {
   const started = performance.now();
   const { width, height, frameRate: fps, sampleRate: rate } = preset;
@@ -181,6 +184,11 @@ async function render(
   const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('2D canvas unavailable');
+  // Texts and captions, laid out with the same code as the preview.
+  const plan = buildPlan(project);
+  const spriteOf = (key: string) => sprites.get(key);
+  const metaOf = (key: string) => sprites.get(key)?.meta;
+  const frameScale = width / FRAME_W;
 
   const sink = await createOpfsTarget(EXPORT_PATH);
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target: sink.target });
@@ -205,6 +213,7 @@ async function render(
   };
 
   let lastPost = 0;
+  let lastVideo: OffscreenCanvas | null = null;
   try {
     await output.start();
     let clipStartSec = 0;
@@ -232,11 +241,23 @@ async function render(
       let k = 0;
       for await (const image of frames) {
         checkCanceled();
-        // Before the first decodable frame we repeat whatever is on the canvas (black at the very start).
+        // Before the first decodable frame we repeat the last video frame (black at the very start).
         if (image) {
           ctx.fillStyle = '#000';
           ctx.fillRect(0, 0, width, height);
           ctx.drawImage(image, 0, 0, width, height);
+        }
+        if (plan.items.length > 0) {
+          // Overlays are drawn onto a copy so a repeated video frame doesn't accumulate them.
+          if (!image) {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
+            if (lastVideo) ctx.drawImage(lastVideo, 0, 0);
+          } else {
+            lastVideo ??= new OffscreenCanvas(width, height);
+            lastVideo.getContext('2d')?.drawImage(canvas, 0, 0);
+          }
+          drawOps(ctx, layoutAt(plan, (firstFrame + k) / fps, metaOf), spriteOf, frameScale);
         }
         await video.add((firstFrame + k) / fps, 1 / fps);
         k++;
@@ -268,7 +289,12 @@ self.onmessage = (e: MessageEvent<RenderRequest>) => {
     return;
   }
   canceled = false;
-  render(msg.project, msg.assets, msg.preset, msg.overlay).catch((err: unknown) => {
+  const sprites = new Map((msg.sprites ?? []).map((s) => [s.key, { image: s.bitmap, meta: s.meta }]));
+  render(msg.project, msg.assets, msg.preset, msg.overlay, sprites)
+    .finally(() => {
+      for (const s of sprites.values()) (s.image as ImageBitmap).close();
+    })
+    .catch((err: unknown) => {
     if (err instanceof CanceledError) post({ type: 'canceled' });
     else post({ type: 'error', message: err instanceof Error ? err.message : String(err) });
   });

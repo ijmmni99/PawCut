@@ -54,6 +54,10 @@ export function startRender(
       finish();
     };
   });
-  worker.postMessage(request, request.overlay?.map((c) => c.buffer as ArrayBuffer) ?? []);
+  const transfer: Transferable[] = [
+    ...(request.overlay?.map((c) => c.buffer as ArrayBuffer) ?? []),
+    ...(request.sprites?.map((s) => s.bitmap) ?? []),
+  ];
+  worker.postMessage(request, transfer);
   return { cancel: () => worker.postMessage({ type: 'cancel' }), done };
 }

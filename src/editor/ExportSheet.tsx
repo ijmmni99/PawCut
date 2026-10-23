@@ -6,6 +6,8 @@ import { type ExportHandle, startRender } from '../engine/export/exportClient';
 import { type RenderEvent, TIKTOK_1080P30 } from '../engine/export/protocol';
 import { renderOverlay } from '../engine/audio/overlay';
 import { getAudioBuffer } from '../library/audioLibrary';
+import { buildPlan } from './overlay/plan';
+import { rasterize } from './overlay/sprites';
 import { audioClips, duckEnvelope } from './timeline/audio';
 import { projectDuration } from './timeline/model';
 import { readFile } from '../engine/storage/opfs';
@@ -85,8 +87,17 @@ export function ExportSheet({ open, onClose }: { open: boolean; onClose(): void 
           preset.sampleRate,
         );
       }
-      if (!alive) return;
-      handle.current = startRender({ type: 'start', project, assets, preset, overlay }, onEvent);
+      // Text and caption sprites (fonts are only reliable on the main thread).
+      const sprites = [];
+      for (const [key, spec] of buildPlan(project).specs) {
+        const { bitmap, meta } = await rasterize(spec);
+        sprites.push({ key, bitmap, meta });
+      }
+      if (!alive) {
+        for (const s of sprites) s.bitmap.close();
+        return;
+      }
+      handle.current = startRender({ type: 'start', project, assets, preset, overlay, sprites }, onEvent);
     })().catch((err: unknown) => {
       lock.release();
       if (alive) setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
