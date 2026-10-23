@@ -59,11 +59,19 @@ test('music library → use → sfx → export', async ({ page }, info) => {
   await sheet.locator('input[type=file][accept^="audio"]').setInputFiles([music]);
   await expect(sheet.getByText('music', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(sheet.getByText(/120 BPM/)).toBeVisible();
+  // PawCut's own tracks are composed on first open.
+  await expect(sheet.getByText('Zoomies', { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(sheet.getByText(/140 BPM/)).toBeVisible();
+  await expect(sheet.getByText('Golden Hour', { exact: true })).toBeVisible({ timeout: 60_000 });
   await page.mouse.click(5, 5); // dismiss via backdrop
 
   // Taps to add: Music → Use (2 taps).
   await page.getByRole('button', { name: 'Music' }).click();
-  await sheet.getByRole('button', { name: 'Use' }).first().click();
+  await sheet
+    .locator('li')
+    .filter({ has: page.getByText('music', { exact: true }) })
+    .getByRole('button', { name: 'Use' })
+    .click();
   let clips = await audio(page);
   expect(clips).toHaveLength(1);
   expect(clips[0]).toMatchObject({ track: 'music', start: 0, inSec: 0 });

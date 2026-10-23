@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { downloadFile, formatDuration, shareFile } from '../../app/share';
 import { Sheet } from '../../app/ui/Sheet';
 import {
   deleteLibraryItem,
+  ensureBuiltinMusic,
   importAudioFiles,
   markUsed,
   updateLibraryItem,
@@ -63,6 +64,16 @@ export function MusicSheet({ open, onClose }: { open: boolean; onClose(): void }
   const fileInput = useRef<HTMLInputElement>(null);
   const zipInput = useRef<HTMLInputElement>(null);
   const videoSec = useEditor((s) => (s.project ? projectDuration(s.project) : 0));
+  const [composing, setComposing] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    void ensureBuiltinMusic((done, total) => {
+      setComposing(done < total ? `Composing PawCut tracks… ${done}/${total}` : null);
+    })
+      .then(() => setComposing(null))
+      .catch((err: unknown) => setComposing(`Couldn't compose built-in tracks: ${String(err)}`));
+  }, [open]);
 
   const music = useMemo(
     () =>
@@ -156,6 +167,7 @@ export function MusicSheet({ open, onClose }: { open: boolean; onClose(): void }
           </div>
         )}
         {busy && <p className="text-xs text-zinc-400">{busy}</p>}
+        {composing && <p className="text-xs text-zinc-400">{composing}</p>}
         <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
           {FILTERS.map((f) => (
             <button
@@ -247,22 +259,28 @@ export function MusicSheet({ open, onClose }: { open: boolean; onClose(): void }
                       </button>
                     ))}
                   </div>
-                  <input
-                    defaultValue={item.licenseNote}
-                    placeholder="License note (e.g. Pixabay — commercial OK)"
-                    onBlur={(e) => void updateLibraryItem(item.id, { licenseNote: e.target.value })}
-                    className="min-h-10 w-full rounded-lg bg-zinc-900 px-3 text-sm"
-                    aria-label="License note"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (window.confirm(`Remove “${item.title}” from your library?`)) void deleteLibraryItem(item.id);
-                    }}
-                    className="min-h-10 w-full rounded-lg bg-red-950 text-sm font-semibold text-red-300"
-                  >
-                    Remove from library
-                  </button>
+                  {item.builtin ? (
+                    <p className="text-xs text-zinc-500">{item.licenseNote}</p>
+                  ) : (
+                    <>
+                      <input
+                        defaultValue={item.licenseNote}
+                        placeholder="License note (e.g. Pixabay — commercial OK)"
+                        onBlur={(e) => void updateLibraryItem(item.id, { licenseNote: e.target.value })}
+                        className="min-h-10 w-full rounded-lg bg-zinc-900 px-3 text-sm"
+                        aria-label="License note"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm(`Remove “${item.title}” from your library?`)) void deleteLibraryItem(item.id);
+                        }}
+                        className="min-h-10 w-full rounded-lg bg-red-950 text-sm font-semibold text-red-300"
+                      >
+                        Remove from library
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </li>

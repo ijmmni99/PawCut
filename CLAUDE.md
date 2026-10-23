@@ -60,7 +60,10 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   `Project.mix` (ducking on/off, depth). Pure ops + duck envelope + beat snapping in `src/editor/timeline/audio.ts`.
   Library = Dexie `library` + OPFS `audio/` (`src/library/audioLibrary.ts`): imported music analysed on import
   (`src/engine/audio/analysis.ts`: waveform peaks, BPM + beat grid via onset autocorrelation), built-in SFX are
-  procedural (`sfx.ts`, rendered once to WAV, `SFX_VERSION`), voiceovers via MediaRecorder. Zip backup/restore
+  procedural (`sfx.ts`, rendered once to WAV, `SFX_VERSION`), voiceovers via MediaRecorder. Built-in music
+  (`music.ts`: 5 songs written as code on a tiny sequencer — `Studio` voices are plain-JS DSP, not Web Audio nodes,
+  which were ~50× slower; exact beat grid, loudness-levelled) is composed on first Music-sheet open, stored as AAC
+  .m4a via Mediabunny (`encode.ts`, WAV fallback), ids `music:<song>`, `MUSIC_VERSION`; not deletable, not backed up. Zip backup/restore
   (`backup.ts`, fflate). `scheduleOverlay` (`src/engine/audio/overlay.ts`) is the ONE mix of music/SFX/voice: preview
   runs it on the live AudioContext, export pre-renders it on an OfflineAudioContext and the render worker adds it
   to the clips' own sound. Ducking: voice clips + loud video sound (`asset.loudness`, dB per 0.1s measured from the

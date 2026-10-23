@@ -120,7 +120,12 @@ export async function addAudio(
   const path = `audio/${id}.${extensionOf(fileName, 'm4a')}`;
   await writeFile(path, blob);
   const channels = channelsOf(buffer);
-  const tempo = kind === 'music' ? detectTempo(mixToMono(channels), buffer.sampleRate) : { bpm: null, beats: [] };
+  const tempo =
+    extra.bpm !== undefined
+      ? { bpm: extra.bpm, beats: extra.beats ?? [] }
+      : kind === 'music'
+        ? detectTempo(mixToMono(channels), buffer.sampleRate)
+        : { bpm: null, beats: [] };
   const item: LibraryItem = {
     id,
     kind,
@@ -169,4 +174,52 @@ export async function ensureBuiltinSfx(): Promise<void> {
     });
   }
   await setSetting(SFX_KEY, SFX_VERSION);
+}
+
+const MUSIC_KEY = 'builtinMusicVersion';
+let musicRun: Promise<void> | null = null;
+
+/**
+ * Composes PawCut's built-in tracks into the library once (and again when the songs change). Each render takes a
+ * second or two; `onProgress` reports how many are done.
+ */
+export function ensureBuiltinMusic(onProgress?: (done: number, total: number) => void): Promise<void> {
+  musicRun ??= (async () => {
+    // Composer + AAC encoder load only when the Music sheet first needs them.
+    const [{ MUSIC_SAMPLE_RATE, MUSIC_VERSION, SONGS, renderSong, songBeats }, { encodeCompressed }] = await Promise.all([
+      import('../engine/audio/music'),
+      import('../engine/audio/encode'),
+    ]);
+    const have = (id: string) => useLibrary.getState().items[`music:${id}`];
+    if ((await getSetting<number>(MUSIC_KEY)) === MUSIC_VERSION && SONGS.every((s) => have(s.id))) return;
+    let done = 0;
+    for (const song of SONGS) {
+      const id = `music:${song.id}`;
+      const existing = have(song.id);
+      if (existing && (await getSetting<number>(MUSIC_KEY)) === MUSIC_VERSION) {
+        onProgress?.(++done, SONGS.length);
+        continue;
+      }
+      const { blob, ext } = await encodeCompressed(await renderSong(song), MUSIC_SAMPLE_RATE);
+      decoded.delete(id);
+      if (existing && existing.path !== `audio/${id}.${ext}`) await removeEntry(existing.path);
+      await addAudio(blob, 'music', song.title, `${song.id}.${ext}`, {
+        id,
+        bpm: song.bpm,
+        beats: songBeats(song),
+        mood: existing?.mood ?? song.mood,
+        tags: existing?.tags ?? song.tags,
+        builtin: true,
+        licenseNote: 'Composed by PawCut — free to use anywhere',
+        favorite: existing?.favorite ?? false,
+        lastUsedAt: existing?.lastUsedAt ?? null,
+        createdAt: existing?.createdAt ?? 0,
+      });
+      onProgress?.(++done, SONGS.length);
+    }
+    await setSetting(MUSIC_KEY, MUSIC_VERSION);
+  })().finally(() => {
+    musicRun = null;
+  });
+  return musicRun;
 }
