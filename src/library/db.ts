@@ -1,6 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie';
 import type { AssetAnalysis } from '../ai/autocut/score';
 import type { Asset, Project } from '../editor/timeline/model';
+import type { LibraryItem } from './audioTypes';
 
 /** Undo/redo stacks, persisted per project so history survives reloads. */
 export type ProjectHistory = { projectId: string; past: Project[]; future: Project[] };
@@ -13,6 +14,7 @@ class PawCutDB extends Dexie {
   history!: EntityTable<ProjectHistory, 'projectId'>;
   settings!: EntityTable<Setting, 'key'>;
   analyses!: EntityTable<AssetAnalysis, 'assetId'>;
+  library!: EntityTable<LibraryItem, 'id'>;
 
   constructor() {
     super('pawcut');
@@ -23,6 +25,7 @@ class PawCutDB extends Dexie {
       settings: 'key',
     });
     this.version(2).stores({ analyses: 'assetId' });
+    this.version(3).stores({ library: 'id, kind, lastUsedAt' });
   }
 }
 
