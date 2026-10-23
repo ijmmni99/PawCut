@@ -29,4 +29,9 @@ ffmpeg -v error -y -f lavfi -i "color=c=0xBFBFBF:size=360x640:rate=30:duration=3
 # Music: 30s at 120 BPM (a kick every 0.5s over a soft 220 Hz bed), mp3 — for library import, BPM and mix tests.
 ffmpeg -v error -y -f lavfi -i "aevalsrc='0.15*sin(2*PI*220*t)+0.8*exp(-mod(t,0.5)*30)*sin(2*PI*70*t)':s=44100:d=30" \
   -ac 2 -c:a libmp3lame -b:a 128k "$out/music.mp3"
+# Speech: JFK's "ask not" (11s, public domain) on a plain dark background (so burnt-in captions are easy to detect) — for captions (Whisper) tests.
+jfk="$out/jfk.wav"
+[ -s "$jfk" ] || curl -sSL -o "$jfk" "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/jfk.wav"
+ffmpeg -v error -y -f lavfi -i "color=c=0x203040:size=720x1280:rate=30" -i "$jfk" -shortest \
+  -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -b:v 1M -c:a libopus -ar 48000 "$out/speech.mp4"
 echo "fixtures written to $out"

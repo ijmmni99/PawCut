@@ -70,8 +70,25 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   proxy by the import worker, backfilled on launch; loud = > −30 dBFS and > clip median + 8 dB), 0.15s attack /
   0.5s release. Timeline draws one row per audio track under the video; trims snap to cuts/playhead/beats.
   Auto-Cut "Cut on the beat" nudges cuts to the music's beats (`snapCutsToBeats`) and refits music after Apply.
-- MediaPipe runtime is copied from node_modules to `public/mediapipe/` by `scripts/copy-mediapipe.mjs` (pre-dev /
-  pre-build, gitignored); model committed in `public/models/`. Both runtime-cached by the SW, not precached.
+- **Text & captions (Phase 4)** `src/editor/overlay/` — `Project.texts: TextItem[]` (font, colour, outline/shadow/box/
+  glow, position 0..1, scale, rotation, in/out/loop animation) and `Project.captions` (word-timed `CaptionWord`s +
+  preset/position/maxChars/lines/emoji). `captions.ts` (pure, tested): chunking (Word Pop = 2 words; others fill
+  maxChars×lines; break on pauses >0.7s, sentence ends, manual `brk` split/join), keyword + emoji heuristics (EN/MS/ZH),
+  transcript edits that keep timings. `plan.ts` (pure, DOM-free): project → sprite specs (hash-keyed) + timed items;
+  `layoutAt(plan, t)` → draw ops with animation poses (design frame 1080×1920). `sprites.ts` rasterises specs on the
+  MAIN thread (FontFace web fonts aren't reliable in workers) into ImageBitmaps + measured run/line boxes (karaoke
+  word positions, typewriter reveal). Preview: `OverlayCanvas` (2D canvas over the WebGL preview; tap/drag/pinch
+  texts, centre snap, TikTok safe-zone toggle). Export: ExportSheet rasterises every spec, transfers bitmaps; the
+  render worker rebuilds the same plan and `drawOps` onto each frame. Fonts: 6 OFL fonts from Fontsource
+  (latin+latin-ext woff2, precached), CJK/emoji fall back to system fonts. Timeline shows Text + Captions rows.
+- **Speech-to-text** `src/ai/captions/` — Transformers.js v4 Whisper (`onnx-community/whisper-base_timestamped`, q8,
+  ~77 MB from Hugging Face, cached by Transformers.js in Cache API) in `transcribe.worker.ts`, device `wasm` with
+  threads. Speech = unmuted main clips (proxy audio) + voiceover clips, each decoded with Mediabunny → 16 kHz mono,
+  transcribed with `return_timestamps: 'word'`, words mapped back to timeline time (speed-aware). `?whisper=tiny` for
+  tests. Captions don't follow later cuts — "Re-listen" regenerates keeping the style.
+- MediaPipe + ONNX Runtime WASM are copied from node_modules to `public/mediapipe/` and `public/ort/` by
+  `scripts/copy-runtimes.mjs` (pre-dev / pre-build, gitignored); detector model committed in `public/models/`. All
+  runtime-cached by the SW, not precached.
 - **HDR** `src/engine/media/hdr.ts` — iPhone HLG/PQ BT.2020 → SDR BT.709 in GLSL (`TONEMAP_GLSL`, mirrored in TS for
   tests): decode transfer → linear (203 nits = 1.0) → BT.2020→709 → exposure 0.75 → soft knee at 0.6 → sRGB
   (exposure tuned against iPhone Photos: 1.0 looked overexposed). Used by the preview
@@ -107,6 +124,12 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
 - Proxy scaling is benchmarked per device rather than hard-coded: on GPU-less Chromium WebGL readback is the slowest
   option, on iPhone the 2D canvas path (old Mediabunny resize) made "Preparing" very slow on 4K footage.
 - e2e runs with `workers: 1`: media tests in parallel starve each other and skew the smoothness checks.
+- ORT: the plain `ort-wasm-simd-threaded.wasm` (14 MB) is self-hosted; Transformers.js's default asyncify/JSEP
+  (WebGPU) builds are 27–28 MB, over Cloudflare's 25 MiB per-file limit. Whisper therefore runs on WASM threads.
+- `onnxruntime-node` and `sharp` (Transformers.js Node-only deps) are replaced via npm `overrides` with
+  `@favware/skip-dependency` — their install scripts download native binaries and break CI.
+- Overlays are sprites + transforms, not per-frame text drawing: one rasterisation per caption/text, cheap to
+  composite at 30fps in preview and export, identical output in both.
 - Never use `hardwareAcceleration: 'prefer-hardware'` — it's a hard requirement and fails without a HW encoder.
 
 ## Phase 0 findings — PASSED (see docs/phase0-report.md)
