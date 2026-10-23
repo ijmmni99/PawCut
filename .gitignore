@@ -7,3 +7,4 @@ playwright-report
 .DS_Store
 e2e/fixtures
 public/mediapipe
+public/ort
