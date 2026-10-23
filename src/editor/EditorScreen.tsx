@@ -14,11 +14,19 @@ import { SpeedSheet } from './tools/SpeedSheet';
 
 // Auto-Cut (analysis worker, MediaPipe) only loads when first opened.
 const AutoCutSheet = lazy(() => import('../ai/autocut/AutoCutSheet').then((m) => ({ default: m.AutoCutSheet })));
+// Audio panels load on first use too.
+const MusicSheet = lazy(() => import('./tools/MusicSheet').then((m) => ({ default: m.MusicSheet })));
+const SfxSheet = lazy(() => import('./tools/SfxSheet').then((m) => ({ default: m.SfxSheet })));
+const RecordSheet = lazy(() => import('./tools/RecordSheet').then((m) => ({ default: m.RecordSheet })));
+const AudioClipSheet = lazy(() => import('./tools/AudioSheets').then((m) => ({ default: m.AudioClipSheet })));
+const ClipVolumeSheet = lazy(() => import('./tools/AudioSheets').then((m) => ({ default: m.ClipVolumeSheet })));
 
-/** Clips a tool acts on: the selection, or the clip under the playhead. */
+/** Video clips a tool acts on: the selected ones, or the clip under the playhead. */
 function targetClipIds(): string[] {
   const { project, selection } = useEditor.getState();
-  if (selection.length > 0) return selection;
+  const mainIds = new Set(project?.main.map((c) => c.id));
+  const selected = selection.filter((id) => mainIds.has(id));
+  if (selected.length > 0) return selected;
   if (!project) return [];
   const hit = locate(project, usePlayback.getState().time);
   return hit ? [hit.clip.id] : [];
@@ -137,7 +145,13 @@ export function EditorScreen({ projectId }: { projectId: string }) {
   const { apply, undo, redo, select } = useEditor.getState();
 
   const [missing, setMissing] = useState(false);
-  const [sheet, setSheet] = useState<'speed' | 'export' | 'autocut' | null>(null);
+  const [sheet, setSheet] = useState<
+    'speed' | 'export' | 'autocut' | 'music' | 'sfx' | 'record' | 'audioClip' | 'volume' | null
+  >(null);
+  const selectedAudioId = useEditor((s) =>
+    s.selection.length === 1 && s.project?.audio?.some((c) => c.id === s.selection[0]) ? (s.selection[0] as string) : null,
+  );
+  const [volumeTargets, setVolumeTargets] = useState<string[]>([]);
   const [speedTargets, setSpeedTargets] = useState<string[]>([]);
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -246,6 +260,24 @@ export function EditorScreen({ projectId }: { projectId: string }) {
     setSheet('speed');
   };
 
+  const openSheet = (name: NonNullable<typeof sheet>) => {
+    playerRef.current?.pause();
+    setSheet(name);
+  };
+
+  const openVolume = () => {
+    const ids = targetClipIds();
+    if (ids.length === 0) return;
+    setVolumeTargets(ids);
+    openSheet('volume');
+  };
+
+  const removeAudio = () => {
+    if (!selectedAudioId) return;
+    apply((p) => removeClips(p, new Set([selectedAudioId])));
+    select([]);
+  };
+
   const openExport = () => {
     playerRef.current?.pause();
     setSheet('export');
@@ -342,20 +374,26 @@ export function EditorScreen({ projectId }: { projectId: string }) {
 
       <ClipIssueBar />
       <nav className="flex gap-1 overflow-x-auto border-t border-zinc-800 px-2 pb-[calc(env(safe-area-inset-bottom)+4px)] pt-1">
-        <ToolButton icon="plus" label="Add" onClick={() => fileInput.current?.click()} />
-        <ToolButton
-          icon="sparkle"
-          label="Auto-Cut"
-          onClick={() => {
-            playerRef.current?.pause();
-            setSheet('autocut');
-          }}
-          disabled={!hasTarget}
-        />
-        <ToolButton icon="split" label="Split" onClick={split} disabled={!hasTarget} />
-        <ToolButton icon="speed" label="Speed" onClick={openSpeed} disabled={!hasTarget} />
-        <ToolButton icon="copy" label="Duplicate" onClick={duplicate} disabled={!hasTarget} />
-        <ToolButton icon="trash" label="Delete" onClick={remove} disabled={!hasTarget} />
+        {selectedAudioId ? (
+          <>
+            <ToolButton icon="volume" label="Volume & fades" onClick={() => openSheet('audioClip')} />
+            <ToolButton icon="trash" label="Delete" onClick={removeAudio} />
+            <ToolButton icon="back" label="Done" onClick={() => select([])} />
+          </>
+        ) : (
+          <>
+            <ToolButton icon="plus" label="Add" onClick={() => fileInput.current?.click()} />
+            <ToolButton icon="sparkle" label="Auto-Cut" onClick={() => openSheet('autocut')} disabled={!hasTarget} />
+            <ToolButton icon="music" label="Music" onClick={() => openSheet('music')} disabled={!hasTarget} />
+            <ToolButton icon="bolt" label="SFX" onClick={() => openSheet('sfx')} disabled={!hasTarget} />
+            <ToolButton icon="mic" label="Record" onClick={() => openSheet('record')} disabled={!hasTarget} />
+            <ToolButton icon="split" label="Split" onClick={split} disabled={!hasTarget} />
+            <ToolButton icon="speed" label="Speed" onClick={openSpeed} disabled={!hasTarget} />
+            <ToolButton icon="volume" label="Volume" onClick={openVolume} disabled={!hasTarget} />
+            <ToolButton icon="copy" label="Duplicate" onClick={duplicate} disabled={!hasTarget} />
+            <ToolButton icon="trash" label="Delete" onClick={remove} disabled={!hasTarget} />
+          </>
+        )}
       </nav>
 
       <input ref={fileInput} type="file" accept="video/*" multiple className="hidden" onChange={onPick} />
@@ -366,6 +404,23 @@ export function EditorScreen({ projectId }: { projectId: string }) {
         </Suspense>
       )}
       <ExportSheet open={sheet === 'export'} onClose={closeSheet} />
+      <Suspense fallback={null}>
+        {sheet === 'music' && <MusicSheet open onClose={closeSheet} />}
+        {sheet === 'sfx' && <SfxSheet open onClose={closeSheet} />}
+        {sheet === 'record' && (
+          <RecordSheet
+            open
+            onClose={closeSheet}
+            controls={{
+              play: () => playerRef.current?.play(),
+              pause: () => playerRef.current?.pause(),
+              setMuted: (m) => playerRef.current?.setOutputMuted(m),
+            }}
+          />
+        )}
+        {sheet === 'audioClip' && <AudioClipSheet open onClose={closeSheet} clipId={selectedAudioId} />}
+        {sheet === 'volume' && <ClipVolumeSheet open onClose={closeSheet} clipIds={volumeTargets} />}
+      </Suspense>
     </div>
   );
 }
