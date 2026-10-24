@@ -3,7 +3,7 @@ import { formatDuration } from '../../app/share';
 import { Sheet } from '../../app/ui/Sheet';
 import { useAssets, useEditor, usePlayback } from '../../editor/store';
 import { refitMusic, snapCutsToBeats, timelineBeats } from '../../editor/timeline/audio';
-import { type Asset, newId } from '../../editor/timeline/model';
+import { type Asset, type Clip, newId } from '../../editor/timeline/model';
 import { useLibrary } from '../../library/audioLibrary';
 import { getAnalyses } from './analysisClient';
 import {
@@ -106,6 +106,14 @@ function Heatmap({
   );
 }
 
+/** Volume of the original clip a cut comes from (same asset, covering its middle), if it isn't the default. */
+function volumeFrom(main: readonly Clip[], c: { assetId: string; inSec: number; outSec: number }): { volume?: number } {
+  const mid = (c.inSec + c.outSec) / 2;
+  const same = main.filter((o) => o.assetId === c.assetId);
+  const src = same.find((o) => mid >= o.inSec && mid <= o.outSec) ?? same[0];
+  return src?.volume !== undefined && src.volume !== 1 ? { volume: src.volume } : {};
+}
+
 /**
  * Auto Highlight / Auto-Cut. Analyses every clip on the main track (cached per asset), proposes segments,
  * lets the user tap the heatmap to add/remove pieces, then replaces the main track in one undoable step.
@@ -206,7 +214,10 @@ export function AutoCutSheet({ open, onClose }: { open: boolean; onClose(): void
     const { apply: edit, select } = useEditor.getState();
     const durations = Object.fromEntries(Object.values(library).map((i) => [i.id, i.durationSec]));
     // Music laid under the old cut follows the new length (and keeps its fade-out).
-    edit((p) => refitMusic({ ...p, main: clips.map((c) => ({ id: newId(), ...c })) }, durations));
+    // Each new clip keeps the volume (e.g. muted) of the clip it was cut from.
+    edit((p) =>
+      refitMusic({ ...p, main: clips.map((c) => ({ id: newId(), ...c, ...volumeFrom(p.main, c) })) }, durations),
+    );
     select([]);
     usePlayback.getState().setTime(0);
     onClose();
