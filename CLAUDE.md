@@ -72,6 +72,18 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   proxy by the import worker, backfilled on launch; loud = > −30 dBFS and > clip median + 8 dB), 0.15s attack /
   0.5s release. Timeline draws one row per audio track under the video; trims snap to cuts/playhead/beats.
   Auto-Cut "Cut on the beat" nudges cuts to the music's beats (`snapCutsToBeats`) and refits music after Apply.
+- **Render (Phase 5)** `src/engine/render/renderer.ts` — ONE WebGL2 renderer for preview (HTMLCanvas) and export
+  (OffscreenCanvas in the render worker). Pass 1 per layer: upload frame, rotate, HDR tone-map, look, letterbox
+  (two compiled variants: plain, and `#define LOOK` — software GL and some GPUs don't skip uniform branches, which
+  halved preview fps). Pass 2 only inside a transition: both layers rendered to FBOs, blended by the transition
+  shader (`transitionShaders.ts`, 26 kinds, gl-transitions style, compiled lazily). Looks: `looks.ts` (13 filter
+  presets = adjust values + split-toning + B&W, scaled by amount, user Adjust sliders added on top).
+- **Transitions** `src/editor/timeline/transitions.ts` — stored on the outgoing clip (`Clip.transition`), centred on the
+  cut so the timeline length never changes; duration clamped to both clips. In the window the outgoing clip runs past
+  its out-point and the incoming one starts early (spare source footage when the file has it, else edge frames
+  hold). Preview worker merges the clips' streams by time (incoming frames = slot 1); the player keeps a queue per
+  slot and blends. Paused in a transition = two-layer still. Export iterates output frames globally with up to two
+  open `samplesAtTimestamps` iterators. Timeline: tappable marker on each cut; Transition sheet replays the cut.
 - **Text & captions (Phase 4)** `src/editor/overlay/` — `Project.texts: TextItem[]` (font, colour, outline/shadow/box/
   glow, position 0..1, scale, rotation, in/out/loop animation) and `Project.captions` (word-timed `CaptionWord`s +
   preset/position/maxChars/lines/emoji). `captions.ts` (pure, tested): chunking (Word Pop = 2 words; others fill
