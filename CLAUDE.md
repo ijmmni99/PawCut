@@ -146,6 +146,8 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   out unless tone-mapped (see HDR above). Diagnostics shows "HDR tone-mapping by PawCut" = the probe result.
 - The iOS photo picker converts HEVC to H.264 for web pages by default ("Most Compatible") — very slow for long
   clips. Picker ••• → format "Current" hands over the original instantly; PawCut handles HEVC fine.
+- `audioSession.type = 'playback'` blocks the microphone ("AudioSession category is not compatible with audio
+  capture"): RecordSheet switches to `'play-and-record'` while open and back after (`src/engine/audioSession.ts`).
 - `navigator.share({ files })` needs a fresh user gesture — can't auto-share when export finishes; show a button.
 - `performance.memory` doesn't exist in Safari; memory must be observed via Xcode/Web Inspector or by crash behaviour.
 - iOS ignores manifest `orientation`; a CSS landscape guard covers portrait lock.
