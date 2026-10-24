@@ -9,6 +9,7 @@ import { readFile } from '../../engine/storage/opfs';
 import { useLibrary } from '../../library/audioLibrary';
 import { type CaptionChunk, captionChunks, joinWords } from '../overlay/captions';
 import { CAPTIONS_ID, moveText, textsOf, trimText } from '../overlay/textOps';
+import { TRANSITIONS, cutsWithTransitions } from './transitions';
 import { useAssets, useEditor, usePlayback } from '../store';
 import {
   AUDIO_TRACKS,
@@ -94,6 +95,8 @@ export type TimelineCallbacks = {
   onPeek(assetId: string, sourceSec: number): void;
   /** Trimming finished: show the playhead frame again. */
   onPeekEnd(): void;
+  /** The transition marker between clip `index` and the next was tapped. */
+  onCutTap(index: number): void;
 };
 
 const haptic = () => navigator.vibrate?.(8);
@@ -257,6 +260,17 @@ class TimelineController {
     const w = (clip.outSec - clip.inSec) * this.pps;
     if (x >= x0 - 12 && x <= x0 + 12) return { edge: 'in', clip };
     if (x >= x0 + w - 12 && x <= x0 + w + 12) return { edge: 'out', clip };
+    return null;
+  }
+
+  /** Transition marker between two video clips (small square on the cut). */
+  private cutMarkerAt(x: number, y: number): number | null {
+    const p = this.project;
+    if (!p || p.main.length < 2 || Math.abs(y - (TRACK_Y + TRACK_H / 2)) > 18) return null;
+    const starts = clipStarts(p);
+    for (let i = 1; i < p.main.length; i++) {
+      if (Math.abs(x - this.xOf(starts[i] ?? 0)) <= 15) return i - 1;
+    }
     return null;
   }
 
@@ -528,6 +542,12 @@ class TimelineController {
     if (this.pointers.size > 0) return;
 
     if (m.kind === 'pending') {
+      const cut = this.cutMarkerAt(m.x, m.y);
+      if (cut !== null) {
+        this.finishGesture(true);
+        this.cb.onCutTap(cut);
+        return;
+      }
       const id =
         this.textHitAt(m.x, m.y)?.id ??
         (this.captionsHitAt(m.y) ? CAPTIONS_ID : undefined) ??
@@ -613,6 +633,7 @@ class TimelineController {
     this.drawRuler(p);
     if (this.mode.kind === 'reorder') this.drawReorder(p, this.mode);
     else this.drawTrack(p);
+    if (this.mode.kind !== 'reorder') this.drawCutMarkers(p);
     this.drawTexts(p);
     this.drawCaptions(p);
     this.drawAudio(p);
@@ -766,6 +787,35 @@ class TimelineController {
     }
   }
 
+  /** Transition windows as a light band, and a tappable marker on every cut. */
+  private drawCutMarkers(p: Project): void {
+    if (p.main.length < 2) return;
+    const { ctx } = this;
+    const starts = clipStarts(p);
+    for (const c of cutsWithTransitions(p)) {
+      const x0 = this.xOf(c.time - c.duration / 2);
+      ctx.fillStyle = 'rgba(236,72,153,0.35)';
+      ctx.fillRect(x0, TRACK_Y + TRACK_H - 8, c.duration * this.pps, 8);
+    }
+    const s = 22;
+    for (let i = 1; i < p.main.length; i++) {
+      const x = this.xOf(starts[i] ?? 0);
+      if (x < -s || x > this.width + s) continue;
+      const kind = (p.main[i - 1] as Clip).transition?.kind;
+      const y = TRACK_Y + TRACK_H / 2 - s / 2;
+      ctx.fillStyle = kind ? '#ec4899' : 'rgba(255,255,255,0.92)';
+      ctx.beginPath();
+      ctx.roundRect(x - s / 2, y, s, s, 6);
+      ctx.fill();
+      ctx.font = '600 13px -apple-system, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = kind ? '#fff' : '#18181b';
+      ctx.fillText(kind ? (TRANSITIONS.find((t) => t.id === kind)?.icon ?? '⧉') : '+', x, y + s / 2 + 1);
+      ctx.textAlign = 'start';
+    }
+  }
+
   private drawTexts(p: Project): void {
     const y = this.rowY('text');
     if (y === null) return;
@@ -911,6 +961,7 @@ export function TimelineView(props: TimelineCallbacks) {
       onInteract: () => cbRef.current.onInteract(),
       onPeek: (a, s) => cbRef.current.onPeek(a, s),
       onPeekEnd: () => cbRef.current.onPeekEnd(),
+      onCutTap: (i) => cbRef.current.onCutTap(i),
     });
     const ro = new ResizeObserver(([entry]) => {
       if (entry) controller.resize(entry.contentRect.width, entry.contentRect.height);

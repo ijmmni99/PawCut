@@ -11,7 +11,7 @@ import { CAPTIONS_ID, addText, duplicateText, newTextItem, setCaptions } from '.
 import { PreviewPlayer } from './preview/player';
 import { useAssets, useEditor, usePlayback } from './store';
 import { TimelineView } from './timeline/TimelineView';
-import { duplicateClip, locate, projectDuration, removeClips, splitAt } from './timeline/model';
+import { clipStarts, duplicateClip, locate, projectDuration, removeClips, splitAt } from './timeline/model';
 import { SpeedSheet } from './tools/SpeedSheet';
 
 // Auto-Cut (analysis worker, MediaPipe) only loads when first opened.
@@ -24,6 +24,8 @@ const AudioClipSheet = lazy(() => import('./tools/AudioSheets').then((m) => ({ d
 const TextSheet = lazy(() => import('./tools/TextSheet').then((m) => ({ default: m.TextSheet })));
 // Captions pull in the speech-recognition client (the Whisper worker itself loads only on Generate).
 const CaptionsSheet = lazy(() => import('./tools/CaptionsSheet').then((m) => ({ default: m.CaptionsSheet })));
+const TransitionSheet = lazy(() => import('./tools/TransitionSheet').then((m) => ({ default: m.TransitionSheet })));
+const FilterSheet = lazy(() => import('./tools/FilterSheet').then((m) => ({ default: m.FilterSheet })));
 const ClipVolumeSheet = lazy(() => import('./tools/AudioSheets').then((m) => ({ default: m.ClipVolumeSheet })));
 
 /** Video clips a tool acts on: the selected ones, or the clip under the playhead. */
@@ -151,7 +153,7 @@ export function EditorScreen({ projectId }: { projectId: string }) {
 
   const [missing, setMissing] = useState(false);
   const [sheet, setSheet] = useState<
-    'speed' | 'export' | 'autocut' | 'music' | 'sfx' | 'record' | 'audioClip' | 'volume' | 'text' | 'captions' | null
+    'speed' | 'export' | 'autocut' | 'music' | 'sfx' | 'record' | 'audioClip' | 'volume' | 'text' | 'captions' | 'transition' | 'filters' | null
   >(null);
   const selectedAudioId = useEditor((s) =>
     s.selection.length === 1 && s.project?.audio?.some((c) => c.id === s.selection[0]) ? (s.selection[0] as string) : null,
@@ -162,6 +164,8 @@ export function EditorScreen({ projectId }: { projectId: string }) {
   const captionsSelected = useEditor((s) => s.selection.length === 1 && s.selection[0] === CAPTIONS_ID);
   const [textFocus, setTextFocus] = useState(false);
   const [safeZone, setSafeZone] = useState(false);
+  const [cutIndex, setCutIndex] = useState(0);
+  const [filterTargets, setFilterTargets] = useState<string[]>([]);
   const [volumeTargets, setVolumeTargets] = useState<string[]>([]);
   const [speedTargets, setSpeedTargets] = useState<string[]>([]);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -314,6 +318,30 @@ export function EditorScreen({ projectId }: { projectId: string }) {
     select([]);
   };
 
+  const openTransition = (index: number) => {
+    setCutIndex(index);
+    openSheet('transition');
+  };
+
+  /** Toolbar: the cut nearest the playhead. */
+  const openNearestTransition = () => {
+    if (!project || project.main.length < 2) return;
+    const t = usePlayback.getState().time;
+    const starts = clipStarts(project);
+    let best = 0;
+    for (let i = 1; i < starts.length; i++) {
+      if (Math.abs((starts[i] ?? 0) - t) < Math.abs((starts[best + 1] ?? 0) - t)) best = i - 1;
+    }
+    openTransition(best);
+  };
+
+  const openFilters = () => {
+    const ids = targetClipIds();
+    if (ids.length === 0) return;
+    setFilterTargets(ids);
+    openSheet('filters');
+  };
+
   const openExport = () => {
     playerRef.current?.pause();
     setSheet('export');
@@ -412,6 +440,7 @@ export function EditorScreen({ projectId }: { projectId: string }) {
         onInteract={() => playerRef.current?.pause()}
         onPeek={(assetId, sec) => playerRef.current?.peek(assetId, sec)}
         onPeekEnd={() => playerRef.current?.showTime(usePlayback.getState().time)}
+        onCutTap={openTransition}
       />
 
       <ClipIssueBar />
@@ -447,6 +476,13 @@ export function EditorScreen({ projectId }: { projectId: string }) {
             <ToolButton icon="text" label="Text" onClick={newText} disabled={!hasTarget} />
             <ToolButton icon="music" label="Music" onClick={() => openSheet('music')} disabled={!hasTarget} />
             <ToolButton icon="bolt" label="SFX" onClick={() => openSheet('sfx')} disabled={!hasTarget} />
+            <ToolButton icon="filter" label="Filters" onClick={openFilters} disabled={!hasTarget} />
+            <ToolButton
+              icon="transition"
+              label="Transition"
+              onClick={openNearestTransition}
+              disabled={(project?.main.length ?? 0) < 2}
+            />
             <ToolButton icon="mic" label="Record" onClick={() => openSheet('record')} disabled={!hasTarget} />
             <ToolButton icon="split" label="Split" onClick={split} disabled={!hasTarget} />
             <ToolButton icon="speed" label="Speed" onClick={openSpeed} disabled={!hasTarget} />
@@ -482,6 +518,18 @@ export function EditorScreen({ projectId }: { projectId: string }) {
         {sheet === 'audioClip' && <AudioClipSheet open onClose={closeSheet} clipId={selectedAudioId} />}
         {sheet === 'text' && <TextSheet open onClose={closeSheet} textId={selectedTextId} focus={textFocus} />}
         {sheet === 'captions' && <CaptionsSheet open onClose={closeSheet} />}
+        {sheet === 'transition' && (
+          <TransitionSheet
+            open
+            onClose={closeSheet}
+            cutIndex={cutIndex}
+            onPreview={(from, to) => {
+              playerRef.current?.pause();
+              playerRef.current?.play({ from, to });
+            }}
+          />
+        )}
+        {sheet === 'filters' && <FilterSheet open onClose={closeSheet} clipIds={filterTargets} />}
         {sheet === 'volume' && <ClipVolumeSheet open onClose={closeSheet} clipIds={volumeTargets} />}
       </Suspense>
     </div>
