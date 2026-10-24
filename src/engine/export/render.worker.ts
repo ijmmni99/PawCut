@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 // Renders a Project's main track from the ORIGINAL files to a TikTok-ready MP4 in OPFS.
-// Video: each output frame (constant 30fps) maps back to a source time through the clip's in-point and speed.
+// Video: each output frame (constant 30fps) maps back to a source time through the clip's in-point and speed, and
+// goes through the shared WebGL renderer (looks, HDR tone-mapping, transitions), then texts/captions on top.
 // Audio: decoded per window, speed-resampled to 48 kHz stereo, with short fades at every cut.
 import {
   ALL_FORMATS,
@@ -8,22 +9,23 @@ import {
   AudioSampleSink,
   AudioSampleSource,
   BlobSource,
-  CanvasSink,
   CanvasSource,
   Input,
   type InputAudioTrack,
-  type InputVideoTrack,
   Mp4OutputFormat,
   Output,
   Quality,
+  type VideoSample,
   VideoSampleSink,
 } from 'mediabunny';
 import { type SpriteImage, drawOps } from '../../editor/overlay/draw';
 import { FRAME_W, buildPlan, layoutAt } from '../../editor/overlay/plan';
-import { type Asset, type Clip, type Project, clipDuration } from '../../editor/timeline/model';
+import { type Asset, type Clip, type Project, clipDuration, clipStarts, locate } from '../../editor/timeline/model';
+import { clipWindow, cutsWithTransitions, sourceTime, transitionAt } from '../../editor/timeline/transitions';
 import { type Pcm, applyEdgeFades, renderSpeedResampled } from '../audio/resample';
-import { trackTransfer } from '../media/hdr';
-import { type FrameScaler, createContainScaler } from '../media/scaler';
+import { type TransferCode, trackTransfer } from '../media/hdr';
+import { lookParams } from '../render/looks';
+import { type Layer, type Renderer, containRect, createRenderer } from '../render/renderer';
 import { readFile } from '../storage/opfs';
 import { createOpfsTarget } from '../storage/opfsWriter';
 import { EXPORT_PATH, type ExportPreset, type RenderEvent, type RenderRequest } from './protocol';
@@ -127,45 +129,25 @@ async function addClipAudio(
   }
 }
 
-let hdrScaler: FrameScaler | null | undefined;
+/** A clip being decoded for export: one sample per output frame across its on-screen window. */
+type ClipFrames = {
+  iter: AsyncIterator<VideoSample | null>;
+  /** Last decoded frame (held when the decoder has nothing yet). */
+  last: VideoFrame | null;
+  rotation: number;
+  transfer: TransferCode;
+  clipId: string;
+};
 
-/**
- * Letterboxed frames of one clip at the given source times. SDR goes through CanvasSink; HDR (iPhone HLG/PQ)
- * goes through the WebGL scaler, which tone-maps so the export isn't washed out.
- */
-async function clipFrames(
-  track: InputVideoTrack,
-  width: number,
-  height: number,
-  times: Iterable<number>,
-): Promise<AsyncIterable<CanvasImageSource | null>> {
-  const transfer = await trackTransfer(track);
-  if (transfer !== 0) {
-    hdrScaler ??= createContainScaler(width, height);
-    const scaler = hdrScaler;
-    if (scaler) {
-      scaler.sourceTransfer = transfer;
-      const samples = new VideoSampleSink(track).samplesAtTimestamps(times);
-      return (async function* () {
-        for await (const sample of samples) {
-          if (!sample) {
-            yield null;
-            continue;
-          }
-          try {
-            await scaler.draw(sample);
-          } finally {
-            sample.close();
-          }
-          yield scaler.canvas;
-        }
-      })();
-    }
-  }
-  const sink = new CanvasSink(track, { width, height, fit: 'contain', poolSize: 2 });
-  return (async function* () {
-    for await (const wrapped of sink.canvasesAtTimestamps(times)) yield wrapped?.canvas ?? null;
-  })();
+function containDraw(ctx: OffscreenCanvasRenderingContext2D, f: VideoFrame, rotation: number, width: number, height: number) {
+  const [sw, sh] = rotation % 180 === 0 ? [f.displayWidth, f.displayHeight] : [f.displayHeight, f.displayWidth];
+  const r = containRect(sw, sh, width, height);
+  ctx.save();
+  ctx.translate(r.x + r.w / 2, r.y + r.h / 2);
+  ctx.rotate((rotation * Math.PI) / 180);
+  const [dw, dh] = rotation % 180 === 0 ? [r.w, r.h] : [r.h, r.w];
+  ctx.drawImage(f, -dw / 2, -dh / 2, dw, dh);
+  ctx.restore();
 }
 
 async function render(
@@ -184,11 +166,26 @@ async function render(
   const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('2D canvas unavailable');
+  // Video goes through the same WebGL renderer as the preview (looks, HDR tone-mapping, transitions).
+  const glCanvas = new OffscreenCanvas(width, height);
+  let renderer: Renderer | null = null;
+  try {
+    renderer = createRenderer(glCanvas);
+  } catch (err) {
+    console.warn('export renderer unavailable, drawing without effects', err);
+  }
   // Texts and captions, laid out with the same code as the preview.
   const plan = buildPlan(project);
   const spriteOf = (key: string) => sprites.get(key);
   const metaOf = (key: string) => sprites.get(key)?.meta;
   const frameScale = width / FRAME_W;
+  const cuts = cutsWithTransitions(project);
+  const starts = clipStarts(project);
+  const windows = project.main.map((_, i) => {
+    const w = clipWindow(project, cuts, i);
+    return { k0: Math.round(w.from * fps), k1: Math.round(w.to * fps), start: w.start };
+  });
+  const looks = project.main.map((c) => lookParams(c.look));
 
   const sink = await createOpfsTarget(EXPORT_PATH);
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target: sink.target });
@@ -212,72 +209,119 @@ async function render(
     return input;
   };
 
+  const openClip = async (i: number): Promise<ClipFrames> => {
+    const clip = project.main[i] as Clip;
+    const input = await inputFor(clip.assetId);
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new Error('A clip has no video track.');
+    const dur = assets[clip.assetId]?.durationSec || clip.outSec;
+    const { k0, k1 } = windows[i] as { k0: number; k1: number };
+    const start = starts[i] ?? 0;
+    // Sample mid-frame so rounding never lands just before the intended source frame.
+    const times = function* () {
+      for (let k = k0; k < k1; k++) yield sourceTime(clip, start, (k + 0.5) / fps, dur);
+    };
+    const iter = new VideoSampleSink(track).samplesAtTimestamps(times())[Symbol.asyncIterator]();
+    return { iter, last: null, rotation: 0, transfer: await trackTransfer(track), clipId: clip.id };
+  };
+
+  const advance = async (cf: ClipFrames): Promise<void> => {
+    const r = await cf.iter.next();
+    const sample = r.done ? null : r.value;
+    if (!sample) return;
+    cf.last?.close();
+    cf.last = sample.toVideoFrame();
+    cf.rotation = sample.rotation;
+    sample.close();
+  };
+
+  const layerOf = (cf: ClipFrames, i: number): Layer | null =>
+    cf.last
+      ? {
+          image: cf.last,
+          width: cf.last.displayWidth,
+          height: cf.last.displayHeight,
+          rotation: cf.rotation,
+          transfer: cf.transfer,
+          colorSpace: cf.last.colorSpace,
+          look: looks[i] ?? null,
+        }
+      : null;
+
+  const open = new Map<number, ClipFrames>();
+  const closeClip = async (i: number) => {
+    const cf = open.get(i);
+    if (!cf) return;
+    open.delete(i);
+    cf.last?.close();
+    await cf.iter.return?.();
+  };
+
   let lastPost = 0;
-  let lastVideo: OffscreenCanvas | null = null;
+  let audioNext = 0;
   try {
     await output.start();
-    let clipStartSec = 0;
-    let framesDone = 0;
-    for (const clip of project.main) {
+    for (let k = 0; k < totalFrames; k++) {
       checkCanceled();
-      const clipEndSec = clipStartSec + clipDuration(clip);
-      const firstFrame = Math.round(clipStartSec * fps);
-      const frameCount = Math.round(clipEndSec * fps) - firstFrame;
-      const firstSample = Math.round(clipStartSec * rate);
-      const sampleCount = Math.round(clipEndSec * rate) - firstSample;
+      // Each clip's sound goes in when its first frame comes up (keeps the muxer interleaving simple).
+      while (audioNext < project.main.length && Math.round((starts[audioNext] ?? 0) * fps) <= k) {
+        const clip = project.main[audioNext] as Clip;
+        const input = await inputFor(clip.assetId);
+        const clipStartSec = starts[audioNext] ?? 0;
+        const firstSample = Math.round(clipStartSec * rate);
+        const sampleCount = Math.round((clipStartSec + clipDuration(clip)) * rate) - firstSample;
+        await addClipAudio(audio, await input.getPrimaryAudioTrack(), clip, firstSample, sampleCount, rate, overlay);
+        audioNext++;
+      }
+      // Clips on screen at this frame (two during a transition).
+      for (let i = 0; i < project.main.length; i++) {
+        const w = windows[i] as { k0: number; k1: number };
+        const visible = k >= w.k0 && k < w.k1;
+        if (visible && !open.has(i)) open.set(i, await openClip(i));
+        else if (!visible && open.has(i)) await closeClip(i);
+      }
+      for (const cf of open.values()) await advance(cf);
 
-      const input = await inputFor(clip.assetId);
-      const [videoTrack, audioTrack] = await Promise.all([input.getPrimaryVideoTrack(), input.getPrimaryAudioTrack()]);
-      if (!videoTrack) throw new Error('A clip has no video track.');
-
-      // Audio for the clip goes in first; it's small once encoded and keeps the muxer interleaving simple.
-      await addClipAudio(audio, audioTrack, clip, firstSample, sampleCount, rate, overlay);
-
-      // Sample mid-frame so rounding never lands just before the intended source frame.
-      const times = function* () {
-        for (let k = 0; k < frameCount; k++) yield clip.inSec + ((k + 0.5) / fps) * clip.speed;
-      };
-      const frames = await clipFrames(videoTrack, width, height, times());
-      let k = 0;
-      for await (const image of frames) {
-        checkCanceled();
-        // Before the first decodable frame we repeat the last video frame (black at the very start).
-        if (image) {
-          ctx.fillStyle = '#000';
-          ctx.fillRect(0, 0, width, height);
-          ctx.drawImage(image, 0, 0, width, height);
-        }
-        if (plan.items.length > 0) {
-          // Overlays are drawn onto a copy so a repeated video frame doesn't accumulate them.
-          if (!image) {
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, width, height);
-            if (lastVideo) ctx.drawImage(lastVideo, 0, 0);
-          } else {
-            lastVideo ??= new OffscreenCanvas(width, height);
-            lastVideo.getContext('2d')?.drawImage(canvas, 0, 0);
-          }
-          drawOps(ctx, layoutAt(plan, (firstFrame + k) / fps, metaOf), spriteOf, frameScale);
-        }
-        await video.add((firstFrame + k) / fps, 1 / fps);
-        k++;
-        framesDone++;
-        const now = performance.now();
-        if (now - lastPost > 250) {
-          lastPost = now;
-          post({ type: 'progress', progress: framesDone / totalFrames, elapsedMs: now - started });
+      const tMid = (k + 0.5) / fps;
+      const tr = transitionAt(cuts, tMid);
+      // Outside transitions exactly one clip is on screen; inside, the outgoing one is A and the incoming one B.
+      const ia = tr ? tr.index : (locate(project, tMid)?.index ?? 0);
+      const ib = tr ? tr.index + 1 : -1;
+      const a = open.get(ia);
+      const b = ib >= 0 ? open.get(ib) : undefined;
+      if (renderer) {
+        renderer.render(a ? layerOf(a, ia) : null, b ? layerOf(b, ib) : null, tr && b ? { kind: tr.kind, p: tr.p } : null);
+        ctx.drawImage(glCanvas, 0, 0);
+      } else {
+        // No WebGL in this worker: plain letterboxed frames, transitions as a cross-fade.
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, width, height);
+        if (a?.last) containDraw(ctx, a.last, a.rotation, width, height);
+        if (tr && b?.last) {
+          ctx.globalAlpha = tr.p;
+          containDraw(ctx, b.last, b.rotation, width, height);
+          ctx.globalAlpha = 1;
         }
       }
-      clipStartSec = clipEndSec;
+      if (plan.items.length > 0) drawOps(ctx, layoutAt(plan, k / fps, metaOf), spriteOf, frameScale);
+      await video.add(k / fps, 1 / fps);
+      const now = performance.now();
+      if (now - lastPost > 250) {
+        lastPost = now;
+        post({ type: 'progress', progress: (k + 1) / totalFrames, elapsedMs: now - started });
+      }
     }
+    for (const i of [...open.keys()]) await closeClip(i);
     await output.finalize();
     const sizeBytes = sink.close();
     post({ type: 'done', opfsPath: EXPORT_PATH, sizeBytes, durationSec: totalSec, elapsedMs: performance.now() - started });
   } catch (err) {
+    for (const i of [...open.keys()]) await closeClip(i).catch(() => undefined);
     await output.cancel().catch(() => undefined);
     sink.close();
     throw err;
   } finally {
+    renderer?.destroy();
     for (const input of inputs.values()) input.dispose();
   }
 }
