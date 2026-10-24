@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { setAudioSession } from '../../engine/audioSession';
 import { formatDuration } from '../../app/share';
 import { Sheet } from '../../app/ui/Sheet';
 import { addAudio } from '../../library/audioLibrary';
@@ -40,6 +41,8 @@ export function RecordSheet({ open, onClose, controls }: { open: boolean; onClos
     if (!open) return;
     let alive = true;
     setState('asking');
+    // iOS only allows the microphone in a recording-capable audio session.
+    setAudioSession('play-and-record');
     navigator.mediaDevices
       ?.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
       .then((s) => {
@@ -78,6 +81,7 @@ export function RecordSheet({ open, onClose, controls }: { open: boolean; onClos
       }
       for (const t of stream.current?.getTracks() ?? []) t.stop();
       stream.current = null;
+      setAudioSession('playback');
     };
   }, [open]);
 

@@ -3,6 +3,7 @@
 // frame to show each animation frame. Because frames after a cut are decoded before the cut is reached, cuts are
 // seamless (no element switching or play() start-up latency, which is what made <video>-based cuts stutter on iOS).
 // While paused, scrubbing requests single stills; the worker only decodes the latest request.
+import { setAudioSession } from '../../engine/audioSession';
 import { scheduleOverlay } from '../../engine/audio/overlay';
 import { getAudioBuffer } from '../../library/audioLibrary';
 import { audioClips, duckEnvelope } from '../timeline/audio';
@@ -30,7 +31,6 @@ type State = 'paused' | 'starting' | 'playing';
 /** Playback smoothness counters (read by e2e tests; reset on every play). */
 export const previewStats = { shown: 0, dropped: 0, maxGapMs: 0, maxGapAt: 0, lastShowAt: 0, lastError: '' };
 
-type AudioSessionNavigator = Navigator & { audioSession?: { type: string } };
 
 export class PreviewPlayer {
   private readonly compositor: Compositor;
@@ -210,8 +210,7 @@ export class PreviewPlayer {
   private ensureAudio(): AudioContext {
     if (this.ctx) return this.ctx;
     // Play through the ringer/silent switch like a video app (Safari 17+).
-    const session = (navigator as AudioSessionNavigator).audioSession;
-    if (session) session.type = 'playback';
+    setAudioSession('playback');
     const ctx = new AudioContext({ latencyHint: 'interactive' });
     this.master = ctx.createGain();
     this.master.connect(ctx.destination);
