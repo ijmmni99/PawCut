@@ -8,11 +8,35 @@ import { scheduleOverlay } from '../../engine/audio/overlay';
 import { getAudioBuffer } from '../../library/audioLibrary';
 import { audioClips, duckEnvelope } from '../timeline/audio';
 import { useAssets, useEditor, usePlayback } from '../store';
-import { locate, projectDuration } from '../timeline/model';
+import { lookParams, type LookParams } from '../../engine/render/looks';
+import type { TransitionState } from '../../engine/render/renderer';
+import { type Clip, type Project, clipStarts, locate, projectDuration } from '../timeline/model';
+import { type Cut, cutsWithTransitions, sourceTime, transitionAt } from '../timeline/transitions';
 import { type Compositor, type FrameSource, createCompositor } from './compositor';
-import type { PreviewEvent, PreviewRequest } from './protocol';
+import type { PreviewEvent, PreviewRequest, StillLayer } from './protocol';
 
 type QueuedFrame = FrameSource & { t: number };
+
+const looks = new WeakMap<Clip, LookParams | null>();
+function lookOfClip(clip: Clip | undefined): LookParams | null {
+  if (!clip?.look) return null;
+  let l = looks.get(clip);
+  if (l === undefined) {
+    l = lookParams(clip.look);
+    looks.set(clip, l);
+  }
+  return l;
+}
+
+const cutCache = new WeakMap<Project, Cut[]>();
+function cutsOf(p: Project): Cut[] {
+  let c = cutCache.get(p);
+  if (!c) {
+    c = cutsWithTransitions(p);
+    cutCache.set(p, c);
+  }
+  return c;
+}
 type AudioChunk = Extract<PreviewEvent, { type: 'audio' }>;
 
 /** Wait at most this long for the first audio chunk before starting the clock. */
@@ -36,8 +60,14 @@ export class PreviewPlayer {
   private readonly compositor: Compositor;
   private readonly worker: Worker;
   private readonly unsubscribers: Array<() => void> = [];
-  private shown: FrameSource | null = null;
+  /** Frames on screen: the main layer, and the incoming clip during a transition. */
+  private shownA: FrameSource | null = null;
+  private shownB: FrameSource | null = null;
+  /** Decoded frames waiting for their time: slot 0 (main) and slot 1 (incoming clip in a transition). */
   private queue: QueuedFrame[] = [];
+  private queueB: QueuedFrame[] = [];
+  /** Transition for each pending still request. */
+  private readonly stillTransitions = new Map<number, TransitionState | null>();
   private pendingAudio: AudioChunk[] = [];
   private readonly nodes = new Set<AudioBufferSourceNode>();
   private ctx: AudioContext | null = null;
@@ -54,11 +84,16 @@ export class PreviewPlayer {
   private consumed = 0;
   private lastAck = 0;
   private raf = 0;
+  /** Pause here (previewing a transition), or null to play to the end. */
+  private stopAt: number | null = null;
   /** Decoded music / SFX / voice, loaded ahead of time so playback can start instantly. */
   private readonly audioBuffers = new Map<string, AudioBuffer>();
 
   constructor(canvas: HTMLCanvasElement) {
-    this.compositor = createCompositor(canvas);
+    this.compositor = createCompositor(canvas, (clipId) => {
+      const project = useEditor.getState().project;
+      return lookOfClip(project?.main.find((c) => c.id === clipId));
+    });
     this.worker = new Worker(new URL('./preview.worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (e: MessageEvent<PreviewEvent>) => this.onEvent(e.data);
     this.sync();
@@ -123,13 +158,16 @@ export class PreviewPlayer {
     // No point rendering far above the 540p proxy resolution.
     const scale = Math.min(dpr, 810 / Math.max(1, cssWidth));
     this.compositor.resize(Math.round(cssWidth * scale), Math.round(cssHeight * scale));
-    this.compositor.draw(this.shown);
+    this.compositor.redraw();
   }
 
-  private show(source: FrameSource | null): void {
-    if (this.shown && this.shown !== source) this.shown.frame.close();
-    this.shown = source;
-    this.compositor.draw(source);
+  /** Puts frames on screen (B + transition only while inside a transition window). Replaced frames are closed. */
+  private show(a: FrameSource | null, b: FrameSource | null = null, tr: TransitionState | null = null): void {
+    if (this.shownA && this.shownA !== a && this.shownA !== b) this.shownA.frame.close();
+    if (this.shownB && this.shownB !== b && this.shownB !== a) this.shownB.frame.close();
+    this.shownA = a;
+    this.shownB = b;
+    this.compositor.draw(a, b, tr);
   }
 
   // ---- stills ----
@@ -138,32 +176,49 @@ export class PreviewPlayer {
   showTime(t: number): void {
     const project = useEditor.getState().project;
     const hit = project ? locate(project, t) : null;
-    if (!hit) {
+    if (!project || !hit) {
       this.show(null);
       return;
     }
-    this.requestStill(hit.clip.assetId, hit.sourceSec);
+    // Inside a transition: both clips, blended.
+    const tr = transitionAt(cutsOf(project), t);
+    if (tr) {
+      const starts = clipStarts(project);
+      const assets = useAssets.getState().assets;
+      const layer = (i: number): StillLayer => {
+        const clip = project.main[i] as Clip;
+        const dur = assets[clip.assetId]?.durationSec || clip.outSec;
+        return { clipId: clip.id, assetId: clip.assetId, sourceSec: sourceTime(clip, starts[i] ?? 0, t, dur) };
+      };
+      this.requestStill([layer(tr.index), layer(tr.index + 1)], { kind: tr.kind, p: tr.p });
+      return;
+    }
+    this.requestStill([{ clipId: hit.clip.id, assetId: hit.clip.assetId, sourceSec: hit.sourceSec }]);
   }
 
   /** Shows a specific source frame, e.g. the edge being trimmed. */
   peek(assetId: string, sourceSec: number): void {
     if (this.state !== 'paused') this.pause();
-    this.requestStill(assetId, sourceSec);
+    const clip = useEditor.getState().project?.main.find((c) => c.assetId === assetId && sourceSec >= c.inSec - 1 && sourceSec <= c.outSec + 1);
+    this.requestStill([{ clipId: clip?.id ?? '', assetId, sourceSec }]);
   }
 
-  private requestStill(assetId: string, sourceSec: number): void {
-    this.send({ type: 'still', id: ++this.stillId, assetId, sourceSec });
+  private requestStill(layers: StillLayer[], tr: TransitionState | null = null): void {
+    const id = ++this.stillId;
+    this.stillTransitions.set(id, tr);
+    this.send({ type: 'still', id, layers });
   }
 
   // ---- playback ----
 
   /** Must be called from a user gesture: it creates/resumes the AudioContext (iOS autoplay rules). */
-  play(): void {
+  play(range?: { from: number; to: number }): void {
     const project = useEditor.getState().project;
     if (!project || project.main.length === 0 || this.state !== 'paused') return;
     const total = projectDuration(project);
     const playback = usePlayback.getState();
-    const from = playback.time >= total - 1 / 60 ? 0 : playback.time;
+    const from = range ? Math.max(0, range.from) : playback.time >= total - 1 / 60 ? 0 : playback.time;
+    this.stopAt = range ? Math.min(range.to, total) : null;
 
     const ctx = this.ensureAudio();
     void ctx.resume();
@@ -220,7 +275,9 @@ export class PreviewPlayer {
 
   private clearQueues(): void {
     for (const f of this.queue) f.frame.close();
+    for (const f of this.queueB) f.frame.close();
     this.queue = [];
+    this.queueB = [];
     this.pendingAudio = [];
   }
 
@@ -289,21 +346,27 @@ export class PreviewPlayer {
 
   private onEvent(e: PreviewEvent): void {
     switch (e.type) {
-      case 'still':
+      case 'still': {
+        const tr = this.stillTransitions.get(e.id) ?? null;
+        this.stillTransitions.delete(e.id);
         if (this.state !== 'paused' || e.id <= this.shownStillId) {
-          e.frame?.close();
+          for (const l of e.layers) l?.frame.close();
           return;
         }
         this.shownStillId = e.id;
-        this.show(e.frame ? { frame: e.frame, rotation: e.rotation, transfer: e.transfer } : null);
+        const [a = null, b = null] = e.layers;
+        this.show(a ?? b, a && b ? b : null, a && b ? tr : null);
         return;
-      case 'frame':
+      }
+      case 'frame': {
         if (e.gen !== this.gen || this.state === 'paused') {
           e.frame.close();
           return;
         }
-        this.queue.push({ frame: e.frame, rotation: e.rotation, transfer: e.transfer, t: e.t });
+        const f = { frame: e.frame, rotation: e.rotation, transfer: e.transfer, clipId: e.clipId, t: e.t };
+        (e.slot === 1 ? this.queueB : this.queue).push(f);
         return;
+      }
       case 'audio':
         if (e.gen !== this.gen || this.state === 'paused') return;
         this.gotAudio = true;
@@ -341,27 +404,41 @@ export class PreviewPlayer {
 
     const t = this.clock();
     const total = projectDuration(project);
-    if (t >= total) {
+    const end = this.stopAt ?? total;
+    if (t >= end) {
       this.pause();
-      usePlayback.getState().setTime(total);
+      usePlayback.getState().setTime(end);
       return;
     }
 
     // Show the newest frame that is due; drop any older ones the decoder delivered late.
-    let due = -1;
-    for (let i = 0; i < this.queue.length && (this.queue[i] as QueuedFrame).t <= t + 1 / 120; i++) due = i;
-    if (due >= 0) {
-      const frames = this.queue.splice(0, due + 1);
+    const takeDue = (q: QueuedFrame[]): { frame: QueuedFrame | null; taken: number; dropped: number } => {
+      let due = -1;
+      for (let i = 0; i < q.length && (q[i] as QueuedFrame).t <= t + 1 / 120; i++) due = i;
+      if (due < 0) return { frame: null, taken: 0, dropped: 0 };
+      const frames = q.splice(0, due + 1);
       const latest = frames.pop() as QueuedFrame;
       for (const f of frames) f.frame.close();
-      this.show({ frame: latest.frame, rotation: latest.rotation, transfer: latest.transfer });
-      this.consumed += due + 1;
+      return { frame: latest, taken: due + 1, dropped: due };
+    };
+    const tr = transitionAt(cutsOf(project), t);
+    const dueB = takeDue(this.queueB);
+    const dueA = takeDue(this.queue);
+    this.consumed += dueA.taken + dueB.taken;
+    const nextB = tr ? (dueB.frame ?? this.shownB) : (dueB.frame?.frame.close(), null);
+    if (dueA.frame || nextB !== this.shownB) {
+      this.show(dueA.frame ?? this.shownA, nextB, tr && nextB ? { kind: tr.kind, p: tr.p } : null);
+    } else if (tr && this.shownB) {
+      // Same frames, but the transition has moved on.
+      this.compositor.draw(this.shownA, this.shownB, { kind: tr.kind, p: tr.p });
+    }
+    if (dueA.frame) {
       const shownAt = performance.now();
       const gap = previewStats.lastShowAt ? shownAt - previewStats.lastShowAt : 0;
       if (gap > previewStats.maxGapMs) Object.assign(previewStats, { maxGapMs: gap, maxGapAt: t });
       previewStats.lastShowAt = shownAt;
       previewStats.shown++;
-      previewStats.dropped += frames.length;
+      previewStats.dropped += dueA.dropped;
     }
 
     const now = performance.now();

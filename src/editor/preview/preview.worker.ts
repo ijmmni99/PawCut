@@ -1,12 +1,14 @@
 /// <reference lib="webworker" />
 // Preview decoder. While playing it walks the timeline from the requested time and streams decoded proxy frames
 // (as transferable VideoFrames) and PCM audio chunks to the main thread, running ahead of the playhead so cuts are
-// already decoded before they're reached. Credit-based backpressure keeps only a handful of frames in flight.
+// already decoded before they're reached. During a transition the two clips' streams interleave (incoming = slot 1).
+// Credit-based backpressure keeps only a handful of frames in flight.
 import { ALL_FORMATS, AudioSampleSink, BlobSource, Input, type VideoSample, VideoSampleSink } from 'mediabunny';
 import { type TransferCode, trackTransfer } from '../../engine/media/hdr';
 import { readFile } from '../../engine/storage/opfs';
 import { type Asset, type Clip, type Project, clipDuration } from '../timeline/model';
-import type { PreviewEvent, PreviewRequest } from './protocol';
+import { clipWindow, cutsWithTransitions, sourceTime } from '../timeline/transitions';
+import type { DecodedFrame, PreviewEvent, PreviewRequest, StillLayer } from './protocol';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -90,7 +92,7 @@ function timeline(from: number): Array<{ clip: Clip; start: number }> {
 
 // ---- playback streams ----
 
-/** One clip's decoded-sample stream. The next clip's stream is opened and pre-decoded while the current one plays. */
+/** One clip's decoded-sample stream. Upcoming clips are opened and pre-decoded before they're needed. */
 type ClipStream = {
   iter: AsyncGenerator<VideoSample> | null;
   transfer: TransferCode;
@@ -99,10 +101,12 @@ type ClipStream = {
   pump: Promise<void>;
 };
 
-/** Samples to pre-decode from the next clip so its decoder is warm before the cut. */
+/** Samples to pre-decode from an upcoming clip so its decoder is warm before the cut. */
 const PREFETCH_SAMPLES = 4;
+/** Open the next clip's stream this long (timeline seconds) before it appears. */
+const PREOPEN_SEC = 1;
 
-function openStream(clip: Clip, srcFrom: number): ClipStream {
+function openStream(clip: Clip, srcFrom: number, srcTo: number): ClipStream {
   const cs: ClipStream = { iter: null, transfer: 0, buffer: [], done: false, pump: Promise.resolve() };
   cs.pump = (async () => {
     const input = await inputFor(clip.assetId);
@@ -112,7 +116,7 @@ function openStream(clip: Clip, srcFrom: number): ClipStream {
       return;
     }
     cs.transfer = input ? await transferOf(input) : 0;
-    cs.iter = new VideoSampleSink(track).samples(srcFrom, clip.outSec);
+    cs.iter = new VideoSampleSink(track).samples(srcFrom, srcTo);
   })();
   return cs;
 }
@@ -147,54 +151,127 @@ async function closeStream(cs: ClipStream): Promise<void> {
   await cs.iter?.return(undefined);
 }
 
+/**
+ * What each clip contributes from `from` on: its on-screen window (including transition halves), the source range
+ * to decode (running into spare footage around the cut when the file has it), and where its incoming transition
+ * ends (frames before that go to slot 1, blended over the outgoing clip).
+ */
+type Segment = { clip: Clip; start: number; from: number; to: number; srcFrom: number; srcTo: number; slot1Until: number };
+
+function segments(from: number): Segment[] {
+  if (!project) return [];
+  const cuts = cutsWithTransitions(project);
+  const out: Segment[] = [];
+  project.main.forEach((clip, i) => {
+    const w = clipWindow(project as Project, cuts, i);
+    if (w.to <= from + 1e-6) return;
+    const dur = assets[clip.assetId]?.durationSec || clip.outSec;
+    const visibleFrom = Math.max(w.from, from);
+    const before = cuts.find((c) => c.index === i - 1);
+    out.push({
+      clip,
+      start: w.start,
+      from: visibleFrom,
+      to: w.to,
+      srcFrom: sourceTime(clip, w.start, visibleFrom, dur),
+      srcTo: Math.min(dur, clip.inSec + (w.to - w.start) * clip.speed),
+      slot1Until: before ? w.start + before.duration / 2 : -Infinity,
+    });
+  });
+  return out;
+}
+
+type Active = {
+  seg: Segment;
+  cs: ClipStream;
+  head: VideoSample | null;
+  headT: number;
+  lastT: number;
+  /** Nothing posted yet (an upcoming clip, still warming up in the background). */
+  first: boolean;
+  ended: boolean;
+};
+
+/** Streams frames of every visible clip in timeline order; during a transition two clips interleave. */
 async function streamVideo(myGen: number, from: number): Promise<void> {
-  const entries = timeline(from);
-  const srcFromOf = (i: number) => {
-    const e = entries[i];
-    return e ? e.clip.inSec + Math.max(0, from - e.start) * e.clip.speed : 0;
-  };
-  let current = entries[0] ? openStream(entries[0].clip, srcFromOf(0)) : null;
-  try {
-    for (let i = 0; i < entries.length && current; i++) {
-      const { clip, start } = entries[i] as { clip: Clip; start: number };
-      const nextEntry = entries[i + 1];
-      let next: ClipStream | null = null;
-      let lastT = -Infinity;
-      for (;;) {
-        const sample = await nextSample(current);
-        if (!sample) break;
-        if (myGen !== gen) {
-          sample.close();
-          if (next) await closeStream(next);
-          return;
-        }
-        const t = start + (sample.timestamp - clip.inSec) / clip.speed;
-        if (t < from - 1 / 30 || t - lastT < MIN_FRAME_GAP) {
-          sample.close();
-          continue;
-        }
-        if (!(await waitUntil(myGen, () => inFlight < FRAME_CREDITS))) {
-          sample.close();
-          if (next) await closeStream(next);
-          return;
-        }
-        const frame = sample.toVideoFrame();
-        const rotation = sample.rotation;
+  const segs = segments(from);
+  let next = 0;
+  const open: Active[] = [];
+  const tOf = (a: Active, sample: VideoSample) => a.seg.start + (sample.timestamp - a.seg.clip.inSec) / a.seg.clip.speed;
+  /** Next usable sample of a stream, dropping frames that are too early or too close together. */
+  const fill = async (a: Active) => {
+    while (!a.head && !a.ended) {
+      const sample = await nextSample(a.cs);
+      if (!sample) {
+        a.ended = true;
+        break;
+      }
+      const t = tOf(a, sample);
+      if (t >= a.seg.to) {
         sample.close();
-        inFlight++;
-        lastT = t;
-        post({ type: 'frame', gen: myGen, t: Math.max(t, start), frame, rotation, transfer: current.transfer }, [frame]);
-        // Once this clip is flowing, warm up the next one in the background.
-        if (!next && nextEntry) {
-          next = openStream(nextEntry.clip, srcFromOf(i + 1));
-          prefetch(next, myGen);
+        a.ended = true;
+        break;
+      }
+      if (t < from - 1 / 30 || t - a.lastT < MIN_FRAME_GAP) {
+        sample.close();
+        continue;
+      }
+      a.head = sample;
+      a.headT = t;
+    }
+  };
+  const frontier = () => open.reduce((m, a) => (a.head ? Math.min(m, a.headT) : m), Infinity);
+  try {
+    for (;;) {
+      if (myGen !== gen) return;
+      // Clips already playing first; an upcoming clip is only waited on once its time has come, so warming it up
+      // (in the background) never stalls the clip on screen.
+      for (const a of open) if (!a.first) await fill(a);
+      for (const a of open) if (a.first && !a.head && a.seg.from <= frontier()) await fill(a);
+      for (let i = open.length - 1; i >= 0; i--) {
+        const a = open[i] as Active;
+        if (a.ended && !a.head) {
+          open.splice(i, 1);
+          await closeStream(a.cs);
         }
       }
-      await closeStream(current);
-      current = next ?? (nextEntry ? openStream(nextEntry.clip, srcFromOf(i + 1)) : null);
+      const upcoming = segs[next];
+      if (upcoming && (open.length === 0 || upcoming.from <= frontier() + PREOPEN_SEC)) {
+        const cs = openStream(upcoming.clip, upcoming.srcFrom, upcoming.srcTo);
+        prefetch(cs, myGen);
+        open.push({ seg: upcoming, cs, head: null, headT: Infinity, lastT: -Infinity, first: true, ended: false });
+        next++;
+        continue;
+      }
+      const ready = open.filter((x) => x.head);
+      if (ready.length === 0) {
+        if (open.length === 0) break;
+        continue;
+      }
+      const a = ready.reduce((m, x) => (x.headT < m.headT ? x : m));
+      const sample = a.head as VideoSample;
+      a.head = null;
+      if (!(await waitUntil(myGen, () => inFlight < FRAME_CREDITS))) {
+        sample.close();
+        return;
+      }
+      // A clip with no footage before its in-point holds its first frame from the start of its window.
+      const t = a.first ? Math.min(a.headT, Math.max(a.seg.from, from)) : a.headT;
+      a.first = false;
+      a.lastT = a.headT;
+      a.headT = Infinity;
+      const frame = sample.toVideoFrame();
+      const rotation = sample.rotation;
+      sample.close();
+      inFlight++;
+      const slot = t < a.seg.slot1Until ? 1 : 0;
+      post({ type: 'frame', gen: myGen, t, slot, frame, rotation, transfer: a.cs.transfer, clipId: a.seg.clip.id }, [frame]);
     }
   } finally {
-    if (current) await closeStream(current);
+    for (const a of open) {
+      a.head?.close();
+      await closeStream(a.cs);
+    }
   }
   if (myGen === gen) post({ type: 'end', gen: myGen });
 }
@@ -263,35 +340,44 @@ async function streamAudio(myGen: number, from: number): Promise<void> {
 
 // ---- stills (scrubbing) ----
 
-let stillRequest: { id: number; assetId: string; sourceSec: number } | null = null;
+let stillRequest: { id: number; layers: StillLayer[] } | null = null;
 let stillBusy = false;
+
+async function decodeStill(layer: StillLayer): Promise<DecodedFrame | null> {
+  const input = await inputFor(layer.assetId);
+  const track = await input?.getPrimaryVideoTrack();
+  if (!input || !track) return null;
+  let sink = videoSinks.get(input);
+  if (!sink) {
+    sink = new VideoSampleSink(track);
+    videoSinks.set(input, sink);
+  }
+  const sample = await sink.getSample(layer.sourceSec).catch(() => null);
+  if (!sample) return null;
+  const frame = sample.toVideoFrame();
+  const rotation = sample.rotation;
+  sample.close();
+  return { frame, rotation, transfer: await transferOf(input), clipId: layer.clipId };
+}
 
 async function serveStills(): Promise<void> {
   if (stillBusy) return;
   stillBusy = true;
   try {
     while (stillRequest) {
-      const { id, assetId, sourceSec } = stillRequest;
+      const { id, layers } = stillRequest;
       stillRequest = null;
-      const input = await inputFor(assetId);
-      const track = await input?.getPrimaryVideoTrack();
-      let sink = input ? videoSinks.get(input) : undefined;
-      if (input && track && !sink) {
-        sink = new VideoSampleSink(track);
-        videoSinks.set(input, sink);
+      const frames: Array<DecodedFrame | null> = [];
+      for (const layer of layers) {
+        // A newer request arrived meanwhile: drop this one.
+        if (stillRequest) break;
+        frames.push(await decodeStill(layer));
       }
-      // A newer request arrived while we were opening the file: skip straight to it.
-      if (stillRequest) continue;
-      const sample = sink ? await sink.getSample(sourceSec).catch(() => null) : null;
-      if (!sample) {
-        post({ type: 'still', id, frame: null, rotation: 0, transfer: 0 });
+      if (frames.length < layers.length) {
+        for (const f of frames) f?.frame.close();
         continue;
       }
-      const frame = sample.toVideoFrame();
-      const rotation = sample.rotation;
-      sample.close();
-      const transfer = input ? await transferOf(input) : 0;
-      post({ type: 'still', id, frame, rotation, transfer }, [frame]);
+      post({ type: 'still', id, layers: frames }, frames.flatMap((f) => (f ? [f.frame] : [])));
     }
   } finally {
     stillBusy = false;

@@ -45,10 +45,10 @@ export function isHdrSample(sample: VideoSample, trackTransfer: TransferCode = 0
 }
 
 /**
- * WebGL scaler. Tone-maps HDR (HLG/PQ) to SDR in the same pass. `fit: 'contain'` letterboxes into the canvas
- * (export), `'fill'` stretches to it (proxies, where the canvas already has the source aspect).
+ * WebGL scaler for proxies (the canvas already has the source aspect, so it stretches to fill). Tone-maps HDR
+ * (HLG/PQ) to SDR in the same pass. Export uses the shared renderer (src/engine/render/renderer.ts) instead.
  */
-function createGL(canvas: OffscreenCanvas, fit: 'fill' | 'contain' = 'fill'): FrameScaler | null {
+function createGL(canvas: OffscreenCanvas): FrameScaler | null {
   const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: true });
   if (!gl) return null;
   const shader = (type: number, src: string) => {
@@ -93,18 +93,6 @@ function createGL(canvas: OffscreenCanvas, fit: 'fill' | 'contain' = 'fill'): Fr
       }
       gl.uniform1i(uRot, Math.round(sample.rotation / 90) % 4);
       gl.uniform1i(uTransfer, shaderTransfer(sample.colorSpace, scaler.sourceTransfer));
-      if (fit === 'contain') {
-        // displayWidth/Height already account for rotation.
-        const sw = sample.displayWidth;
-        const sh = sample.displayHeight;
-        const scale = Math.min(canvas.width / sw, canvas.height / sh);
-        const w = Math.round(sw * scale);
-        const h = Math.round(sh * scale);
-        gl.viewport(0, 0, canvas.width, canvas.height);
-        gl.clearColor(0, 0, 0, 1);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-        gl.viewport(Math.round((canvas.width - w) / 2), Math.round((canvas.height - h) / 2), w, h);
-      }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     },
     dispose() {
@@ -156,15 +144,6 @@ function create2D(canvas: OffscreenCanvas): FrameScaler | null {
     },
     dispose() {},
   };
-}
-
-/** A WebGL scaler that letterboxes into `width`×`height` (export of HDR clips). Null if WebGL2 is unavailable. */
-export function createContainScaler(width: number, height: number): FrameScaler | null {
-  try {
-    return createGL(new OffscreenCanvas(width, height), 'contain');
-  } catch {
-    return null;
-  }
 }
 
 function create(kind: ScalerKind, width: number, height: number): FrameScaler | null {
