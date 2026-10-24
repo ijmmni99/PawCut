@@ -3,6 +3,8 @@
 // sample buffers — ~100× faster than thousands of Web Audio nodes, and runs anywhere (tests render it in Node).
 // No samples, so no licensing — every track is free to use anywhere. Tempo is fixed per song, so the beat grid is exact.
 
+import { CUTE_SONGS } from './cuteSongs';
+
 export const MUSIC_SAMPLE_RATE = 44_100;
 /** Bump when songs or voices change so stored renders are regenerated. */
 export const MUSIC_VERSION = 1;
@@ -17,6 +19,8 @@ export type Song = {
   bars: number;
   mood: string;
   tags: string[];
+  /** Beats per bar (default 4). */
+  meter?: number;
   compose(s: Studio): void;
 };
 
@@ -136,6 +140,8 @@ function reverb(input: Float32Array, sr: number, seedOffset: number): Float32Arr
 export class Studio {
   readonly sr: number;
   readonly bpm: number;
+  /** Beats per bar, for `phrase`. */
+  meter = 4;
   private readonly L: Float32Array;
   private readonly R: Float32Array;
   private readonly pumpL: Float32Array;
@@ -625,6 +631,253 @@ export class Studio {
     });
   }
 
+  // ---- voices for the second cute set (chiptune, bossa, ska, future bass, swing, lullaby) ----
+
+  /** 8-bit square lead with a little delayed vibrato. */
+  chip(b: number, midi: number, beats: number, level = 0.07, pan = 0): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi),
+      vibrato: { rate: 6, cents: 14 },
+      oscs: [{ wave: 'square', amp: 1 }],
+      env: { a: 0.002, d: 0.12, s: 0.75, hold: this.t(beats) * 0.85, r: 0.03 },
+      level,
+      pan,
+      send: 0.1,
+    });
+  }
+
+  /** Fast chip arpeggio cycling through `notes` every 32nd note. */
+  chipArp(b: number, notes: readonly number[], beats: number, level = 0.035, pan = -0.2): void {
+    const step = 0.125;
+    for (let k = 0; k * step < beats; k++) {
+      this.voice({
+        t: this.t(b + k * step),
+        freq: hz(notes[k % notes.length] as number),
+        oscs: [{ wave: 'square', amp: 1 }],
+        env: { a: 0.001, d: 0.05, s: 0.6, hold: this.t(step) * 0.8, r: 0.01 },
+        level,
+        pan,
+      });
+    }
+  }
+
+  triBass(b: number, midi: number, beats: number, level = 0.3): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi),
+      oscs: [{ wave: 'tri', amp: 1 }],
+      env: { a: 0.002, d: 0.1, s: 0.9, hold: this.t(beats) * 0.8, r: 0.02 },
+      level,
+    });
+  }
+
+  /** Chip drums: 'kick' (pitch-dropping triangle), 'snare' (noise burst), 'hat' (short bright noise). */
+  chipDrum(b: number, kind: 'kick' | 'snare' | 'hat', level = 0.4): void {
+    const t = this.t(b);
+    if (kind === 'kick') {
+      this.voice({ t, freq: 140, freqEnd: 40, glide: 0.09, oscs: [{ wave: 'tri', amp: 1 }], env: { a: 0.001, d: 0.18, s: 0 }, level });
+    } else {
+      this.voice({
+        t,
+        freq: 1,
+        oscs: [{ wave: 'noise', amp: 1 }],
+        env: { a: 0.001, d: kind === 'snare' ? 0.14 : 0.03, s: 0 },
+        filter: { type: 'hp', from: kind === 'snare' ? 1200 : 6000 },
+        level,
+        pan: kind === 'hat' ? 0.2 : 0,
+      });
+    }
+  }
+
+  /** Drawbar-organ chord (short = ska stab). */
+  organ(b: number, notes: readonly number[], beats: number, level = 0.05): void {
+    notes.forEach((m, i) =>
+      this.voice({
+        t: this.t(b),
+        freq: hz(m),
+        oscs: [
+          { wave: 'sine', amp: 1 },
+          { wave: 'sine', amp: 0.6, ratio: 2 },
+          { wave: 'sine', amp: 0.3, ratio: 3 },
+          { wave: 'sine', amp: 0.15, ratio: 4 },
+        ],
+        env: { a: 0.004, d: 0.08, s: 0.8, hold: this.t(beats) * 0.7, r: 0.04 },
+        level,
+        pan: (i / Math.max(1, notes.length - 1) - 0.5) * 0.4,
+        send: 0.15,
+      }),
+    );
+  }
+
+  /** Brassy stab/lead: scoops up a semitone into the note. */
+  brass(b: number, midi: number, beats: number, level = 0.07, pan = 0.1): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi - 1),
+      freqEnd: hz(midi),
+      glide: 0.05,
+      oscs: [
+        { wave: 'saw', amp: 1, detune: -5 },
+        { wave: 'saw', amp: 1, detune: 5 },
+        { wave: 'square', amp: 0.4 },
+      ],
+      env: { a: 0.02, d: 0.15, s: 0.75, hold: this.t(beats) * 0.85, r: 0.06 },
+      filter: { type: 'lp', from: 900, to: 3200, sweep: 0.08, q: 1.2 },
+      level,
+      pan,
+      send: 0.2,
+    });
+  }
+
+  /** Future-bass supersaw chord on the pumped bus. */
+  supersaw(b: number, notes: readonly number[], beats: number, level = 0.025, bright = 3500): void {
+    notes.forEach((m, i) =>
+      this.voice({
+        t: this.t(b),
+        freq: hz(m),
+        oscs: [-18, -8, 0, 8, 18].map((detune) => ({ wave: 'saw' as const, amp: 1, detune })),
+        env: { a: 0.01, d: 0.2, s: 0.8, hold: this.t(beats) * 0.9, r: 0.12 },
+        filter: { type: 'lp', from: bright },
+        level,
+        pan: i % 2 ? 0.4 : -0.4,
+        send: 0.3,
+        pump: true,
+      }),
+    );
+  }
+
+  /** Pitched "ooh" vocal chop: buzzy source through a vowel-ish band-pass. */
+  ooh(b: number, midi: number, beats: number, level = 0.12, pan = 0): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi),
+      vibrato: { rate: 5, cents: 12 },
+      oscs: [
+        { wave: 'saw', amp: 0.6 },
+        { wave: 'sine', amp: 1 },
+      ],
+      env: { a: 0.015, d: 0.1, s: 0.8, hold: this.t(beats) * 0.85, r: 0.07 },
+      filter: { type: 'bp', from: 900, q: 1.6 },
+      level: level * 1.6,
+      pan,
+      send: 0.35,
+    });
+  }
+
+  /** Nylon-string guitar note. */
+  nylon(b: number, midi: number, level = 0.12, pan = 0, delaySec = 0): void {
+    this.voice({
+      t: this.t(b) + delaySec,
+      freq: hz(midi),
+      oscs: [
+        { wave: 'tri', amp: 1 },
+        { wave: 'saw', amp: 0.25 },
+      ],
+      env: { a: 0.002, d: 1.1, s: 0 },
+      filter: { type: 'lp', from: 2600, to: 900, sweep: 0.4 },
+      level,
+      pan,
+      send: 0.2,
+    });
+  }
+
+  /** Soft upright bass (walking lines). */
+  upright(b: number, midi: number, beats: number, level = 0.32): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi),
+      oscs: [
+        { wave: 'sine', amp: 1 },
+        { wave: 'tri', amp: 0.35, ratio: 2, decay: 0.15 },
+      ],
+      env: { a: 0.004, d: 0.5, s: 0.35, hold: this.t(beats) * 0.85, r: 0.05 },
+      filter: { type: 'lp', from: 1100 },
+      level,
+    });
+  }
+
+  /** Brush on a snare: soft swish. */
+  brush(b: number, level = 0.07, long = false): void {
+    this.voice({
+      t: this.t(b),
+      freq: 1,
+      oscs: [{ wave: 'noise', amp: 1 }],
+      env: { a: long ? 0.06 : 0.01, d: long ? 0.3 : 0.12, s: 0 },
+      filter: { type: 'bp', from: 3200, q: 0.8 },
+      level,
+      pan: -0.15,
+      send: 0.1,
+    });
+  }
+
+  /** Rim click (bossa clave, cross-stick). */
+  rim(b: number, level = 0.2, pan = 0.25): void {
+    const t = this.t(b);
+    this.voice({ t, freq: 1700, oscs: [{ wave: 'tri', amp: 1 }], env: { a: 0.0005, d: 0.025, s: 0 }, level, pan, send: 0.1 });
+    this.voice({
+      t,
+      freq: 1,
+      oscs: [{ wave: 'noise', amp: 1 }],
+      env: { a: 0.0005, d: 0.02, s: 0 },
+      filter: { type: 'bp', from: 2600, q: 2 },
+      level: level * 0.8,
+      pan,
+    });
+  }
+
+  /** Swing ride cymbal. */
+  ride(b: number, level = 0.06): void {
+    this.voice({
+      t: this.t(b),
+      // Noise wash plus a faint metallic ping.
+      freq: 3150,
+      oscs: [
+        { wave: 'noise', amp: 0.6 },
+        { wave: 'square', amp: 0.08, decay: 0.15 },
+      ],
+      env: { a: 0.001, d: 0.45, s: 0 },
+      filter: { type: 'hp', from: 6000 },
+      level,
+      pan: 0.3,
+      send: 0.1,
+    });
+  }
+
+  /** Music box tine: bright, a little metallic, long ring. */
+  musicBox(b: number, midi: number, level = 0.14, pan = 0.1): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi),
+      oscs: [
+        { wave: 'sine', amp: 1 },
+        { wave: 'sine', amp: 0.35, ratio: 4.02, decay: 0.2 },
+        { wave: 'sine', amp: 0.12, ratio: 6.9, decay: 0.08 },
+      ],
+      env: { a: 0.001, d: 1.8, s: 0 },
+      level,
+      pan,
+      send: 0.4,
+    });
+  }
+
+  /** Vibraphone-ish mallet (swing melody). */
+  vibes(b: number, midi: number, beats: number, level = 0.14, pan = 0.1): void {
+    this.voice({
+      t: this.t(b),
+      freq: hz(midi),
+      vibrato: { rate: 4.5, cents: 8 },
+      oscs: [
+        { wave: 'sine', amp: 1 },
+        { wave: 'sine', amp: 0.2, ratio: 4, decay: 0.15 },
+      ],
+      env: { a: 0.002, d: Math.max(0.6, this.t(beats) * 1.6), s: 0 },
+      level,
+      pan,
+      send: 0.35,
+    });
+  }
+
   /** Ducks the pad bus on every beat in [from, to) — the classic "breathing" dance pad. */
   pump(from: number, to: number, depth = 0.75): void {
     this.pumps.push([from, to, depth]);
@@ -632,7 +885,7 @@ export class Studio {
 
   /** Plays a bar of notes with `voice` at bar `bar` (4/4). */
   phrase(bar: number, notes: readonly Note[], voice: (b: number, midi: number, beats: number) => void): void {
-    for (const [beat, midi, len] of notes) voice(bar * 4 + beat, midi, len);
+    for (const [beat, midi, len] of notes) voice(bar * this.meter + beat, midi, len);
   }
 
   /** Mixes buses + reverb, levels loudness with gentle saturation and peak-normalises to −1 dBFS. */
@@ -1158,6 +1411,7 @@ export const SONGS: Song[] = [
   picnicDay,
   bubbleBath,
   puppyParade,
+  ...CUTE_SONGS,
   zoomies,
   lazyAfternoon,
   tinyDetective,
@@ -1165,17 +1419,18 @@ export const SONGS: Song[] = [
 ];
 
 export function songDuration(song: Song): number {
-  return (song.bars * 4 * 60) / song.bpm + TAIL_SEC;
+  return (song.bars * (song.meter ?? 4) * 60) / song.bpm + TAIL_SEC;
 }
 
-/** Exact beat times (quarter notes) of the song, seconds. */
+/** Exact beat times of the song, seconds. */
 export function songBeats(song: Song): number[] {
-  return Array.from({ length: song.bars * 4 }, (_, i) => (i * 60) / song.bpm);
+  return Array.from({ length: song.bars * (song.meter ?? 4) }, (_, i) => (i * 60) / song.bpm);
 }
 
 /** Renders a song to planar stereo at MUSIC_SAMPLE_RATE, peak-normalised to −1 dBFS. */
 export function renderSong(song: Song, sampleRate = MUSIC_SAMPLE_RATE): Float32Array[] {
   const studio = new Studio(Math.ceil(songDuration(song) * sampleRate), sampleRate, song.bpm);
+  studio.meter = song.meter ?? 4;
   song.compose(studio);
   return studio.mixdown();
 }
