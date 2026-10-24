@@ -69,7 +69,73 @@ export type Clip = {
   speed: number;
   /** Original-sound gain, 0 (muted) .. 2. Missing = 1. */
   volume?: number;
+  /** Transition into the NEXT clip, centred on the cut (the timeline length doesn't change). */
+  transition?: ClipTransition;
+  /** Filter preset + manual adjustments. */
+  look?: Look;
 };
+
+export type TransitionKind =
+  | 'dissolve'
+  | 'dipBlack'
+  | 'dipWhite'
+  | 'slideLeft'
+  | 'slideUp'
+  | 'pushLeft'
+  | 'pushRight'
+  | 'wipeLeft'
+  | 'wipeUp'
+  | 'circle'
+  | 'heart'
+  | 'luma'
+  | 'pixelize'
+  | 'zoomIn'
+  | 'zoomOut'
+  | 'whipLeft'
+  | 'whipRight'
+  | 'whipUp'
+  | 'whipDown'
+  | 'spin'
+  | 'glitch'
+  | 'rgbSplit'
+  | 'flash'
+  | 'shake'
+  | 'blurZoom'
+  | 'lightLeak';
+
+export type ClipTransition = { kind: TransitionKind; duration: number };
+
+export type FilterId =
+  | 'none'
+  | 'warm'
+  | 'cool'
+  | 'vivid'
+  | 'film'
+  | 'golden'
+  | 'pastel'
+  | 'kitty'
+  | 'tealOrange'
+  | 'retro'
+  | 'dreamy'
+  | 'bw'
+  | 'noir';
+
+/** Manual adjustments, each roughly −1..1 (vignette, sharpen and fade 0..1). Missing = 0. */
+export type Adjust = {
+  exposure: number;
+  contrast: number;
+  highlights: number;
+  shadows: number;
+  saturation: number;
+  vibrance: number;
+  temperature: number;
+  tint: number;
+  fade: number;
+  sharpen: number;
+  vignette: number;
+};
+
+export type Look = { filter: FilterId; amount: number; adjust: Partial<Adjust> };
 
 export type Project = {
   id: string;
@@ -314,6 +380,18 @@ export function setClipVolume(project: Project, clipIds: ReadonlySet<string>, vo
   return replaceMain(
     project,
     project.main.map((c) => (clipIds.has(c.id) ? { ...c, volume: v } : c)),
+  );
+}
+
+export function setLook(project: Project, clipIds: ReadonlySet<string>, look: Look | null): Project {
+  return replaceMain(
+    project,
+    project.main.map((c) => {
+      if (!clipIds.has(c.id)) return c;
+      if (look) return { ...c, look };
+      const { look: _drop, ...rest } = c;
+      return rest;
+    }),
   );
 }
 
