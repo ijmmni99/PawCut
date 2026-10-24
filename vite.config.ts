@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { defineConfig } from 'vite';
+import { type Plugin, defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -25,9 +25,22 @@ function buildLabel(): string {
   return `${sha} · ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
+// Transformers.js references ONNX Runtime's WebGPU/asyncify WASM (25.6 MB), so Vite emits it — over Cloudflare's
+// 25 MiB per-file limit, which fails the deploy. We never load it: the Whisper worker points ORT at the self-hosted
+// plain build in /ort/ (scripts/copy-runtimes.mjs). Drop it from the bundle.
+const dropUnusedOrtWasm: Plugin = {
+  name: 'pawcut-drop-unused-ort-wasm',
+  generateBundle(_options, bundle) {
+    for (const name of Object.keys(bundle)) {
+      if (/ort-wasm-simd-threaded\.(asyncify|jsep|jspi)[^/]*\.wasm$/.test(name)) delete bundle[name];
+    }
+  },
+};
+
 export default defineConfig({
   define: { __APP_VERSION__: JSON.stringify(buildLabel()) },
   plugins: [
+    dropUnusedOrtWasm,
     react(),
     tailwindcss(),
     VitePWA({
