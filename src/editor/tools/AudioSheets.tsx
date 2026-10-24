@@ -119,23 +119,42 @@ export function AudioClipSheet({ open, onClose, clipId }: { open: boolean; onClo
 export function ClipVolumeSheet({ open, onClose, clipIds }: { open: boolean; onClose(): void; clipIds: string[] }) {
   const project = useEditor((s) => s.project);
   const apply = useEditor((s) => s.apply);
-  const ids = new Set(clipIds);
+  const allIds = project?.main.map((c) => c.id) ?? [];
+  const [scope, setScope] = useState<'these' | 'all'>('these');
+  const ids = new Set(scope === 'all' ? allIds : clipIds);
   const first = project?.main.find((c) => ids.has(c.id));
   const volume = first?.volume ?? 1;
+  const theseLabel = clipIds.length === 1 ? 'This clip' : `${clipIds.length} selected`;
   return (
     <Sheet open={open} onClose={onClose} title="Original sound">
       <div className="flex flex-col gap-3 pb-1">
+        {allIds.length > 1 && (
+          <div className="grid grid-cols-2 gap-1 rounded-xl bg-zinc-800 p-1">
+            {(
+              [
+                ['these', theseLabel],
+                ['all', `All clips (${allIds.length})`],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setScope(id)}
+                className={`min-h-10 rounded-lg text-xs font-semibold ${scope === id ? 'bg-zinc-100 text-black' : 'text-zinc-300'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         <Slider label="Volume" value={volume} min={0} max={2} step={0.01} format={pct} onChange={(v) => apply((p) => setClipVolume(p, ids, v))} />
         <button
           type="button"
           onClick={() => apply((p) => setClipVolume(p, ids, volume > 0 ? 0 : 1))}
           className="min-h-11 rounded-xl bg-zinc-800 text-sm font-semibold"
         >
-          {volume > 0 ? 'Mute original sound' : 'Unmute'}
+          {volume > 0 ? (scope === 'all' ? 'Mute all clips' : 'Mute original sound') : scope === 'all' ? 'Unmute all clips' : 'Unmute'}
         </button>
-        <p className="text-xs text-zinc-500">
-          Applies to {clipIds.length === 1 ? 'this clip' : `${clipIds.length} clips`}.
-        </p>
       </div>
     </Sheet>
   );
