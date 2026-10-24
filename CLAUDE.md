@@ -16,7 +16,9 @@ Primary target: iPhone Safari installed to Home Screen. No desktop layout.
 
 ## Workflow
 - Owner's standing instruction: push finished work straight to `main` (Cloudflare Workers Builds deploys `main`).
-  Keep small, validated commits; run `npm run build` and `npm test` before every push.
+  Keep small, validated commits; run `npm run build` and `npm test` before every push. After pushing, check the
+  "Workers Builds: pawcut" check run on the commit (GitHub API) — a failed deploy is otherwise invisible.
+  `npx wrangler deploy --dry-run` reproduces Cloudflare's asset checks locally (25 MiB per file).
 
 ## Stack
 Vite 8, React 18, TypeScript (strict, `noUncheckedIndexedAccess`), Tailwind 4 (via `@tailwindcss/vite`),

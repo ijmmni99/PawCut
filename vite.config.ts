@@ -34,6 +34,11 @@ const dropUnusedOrtWasm: Plugin = {
     for (const name of Object.keys(bundle)) {
       if (/ort-wasm-simd-threaded\.(asyncify|jsep|jspi)[^/]*\.wasm$/.test(name)) delete bundle[name];
     }
+    // Fail here rather than at deploy time if anything else ever crosses the limit.
+    for (const [name, out] of Object.entries(bundle)) {
+      const size = out.type === 'asset' ? out.source.length : out.code.length;
+      if (size > 25 * 1024 * 1024) this.error(`${name} is ${(size / 1048576).toFixed(1)} MiB — over Cloudflare's 25 MiB asset limit`);
+    }
   },
 };
 
