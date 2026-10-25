@@ -24,12 +24,6 @@ import { CAPTIONS_ID, setCaptions } from '../overlay/textOps';
 import { useEditor, usePlayback } from '../store';
 import { type CaptionPreset, type Captions, newId, projectDuration } from '../timeline/model';
 
-const LANGUAGES: Array<[CaptionLanguage, string]> = [
-  ['auto', 'Auto'],
-  ['english', 'English'],
-  ['malay', 'Malay'],
-  ['chinese', '中文'],
-];
 
 type Job = { stage: 'download' | 'audio' | 'transcribe'; progress: number } | null;
 
@@ -73,7 +67,6 @@ function PresetChips({ value, onPick }: { value: CaptionPreset; onPick(p: Captio
 
 export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): void }) {
   const captions = useEditor((s) => s.project?.captions ?? null);
-  const [language, setLanguage] = useState<CaptionLanguage>('auto');
   const [preset, setPreset] = useState<CaptionPreset>('wordPop');
   const [job, setJob] = useState<Job>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +94,7 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
     }
     setJob({ stage: 'download', progress: 0 });
     try {
-      const lang = keep ? (keep.language as CaptionLanguage) : language;
+      const lang: CaptionLanguage = 'malay';
       const words = await transcribe(sources, lang, (stage, progress) => setJob({ stage, progress }));
       if (words.length === 0) {
         setError("Couldn't hear any speech. Type captions instead.");
@@ -136,18 +129,6 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
         <CaptionEditor captions={captions} onChange={apply} busy={job !== null} onRegenerate={() => void generate(captions)} />
       ) : (
         <div className="flex flex-col gap-3 pb-1">
-          <div className="grid grid-cols-4 gap-1 rounded-xl bg-zinc-800 p-1">
-            {LANGUAGES.map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setLanguage(id)}
-                className={`min-h-10 rounded-lg text-xs font-semibold ${language === id ? 'bg-zinc-100 text-black' : 'text-zinc-300'}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
           <PresetChips value={preset} onPick={setPreset} />
           {typing ? (
             <>

@@ -100,8 +100,11 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   gitignored output) downloads it into `public/models/whisper/` split into ≤20 MB parts + `parts.json`; the worker's
   `env.fetch` maps Hugging Face URLs to those parts (with retries) and falls back to Hugging Face when absent —
   iPhone Safari failed the cross-origin download instantly ("Load failed") in `transcribe.worker.ts`, device `wasm` with
-  threads. Speech = unmuted main clips (proxy audio) + voiceover clips, each decoded with Mediabunny → 16 kHz mono,
-  transcribed with `return_timestamps: 'word'`, words mapped back to timeline time (speed-aware). `?whisper=tiny` for
+  threads. **Malay only** (owner's audience; fixing the language also stops Whisper guessing). Speech = unmuted main
+  clips (proxy audio) + voiceover clips. Each FILE is transcribed once over the merged used ranges (+1 s context —
+  per-clip snippets of 1–3 s after Auto-Cut produced garbage), only on energy-VAD speech regions (Whisper invents
+  "Terima kasih kerana menonton" on silence/noise), output cleaned of known outro hallucinations + loops, then words
+  are placed onto every clip showing them (`speech.ts`, pure, tested). `?whisper=tiny` for
   tests. Captions don't follow later cuts — "Re-listen" regenerates keeping the style.
 - MediaPipe + ONNX Runtime WASM are copied from node_modules to `public/mediapipe/` and `public/ort/` by
   `scripts/copy-runtimes.mjs` (pre-dev / pre-build, gitignored); detector model committed in `public/models/`. All

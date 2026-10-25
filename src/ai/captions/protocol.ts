@@ -1,6 +1,7 @@
 // Messages between the main thread and the transcription worker.
 
-export type CaptionLanguage = 'auto' | 'english' | 'malay' | 'chinese';
+/** Captions are Malay-only (the owner's audience); fixing the language also stops Whisper guessing wrong. */
+export type CaptionLanguage = 'malay';
 
 /** One stretch of speech to transcribe: a source file window placed on the timeline. */
 export type SpeechSource = {

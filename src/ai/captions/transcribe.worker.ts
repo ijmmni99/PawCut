@@ -5,6 +5,7 @@ import { type AutomaticSpeechRecognitionPipeline, env, pipeline } from '@hugging
 import { ALL_FORMATS, AudioSampleSink, BlobSource, Input } from 'mediabunny';
 import { readFile } from '../../engine/storage/opfs';
 import type { SpeechSource, TimedWord, TranscribeEvent, TranscribeRequest } from './protocol';
+import { cleanWords, placeWords, sourceRanges, speechRegions } from './speech';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -155,36 +156,49 @@ async function speechAudio(src: SpeechSource): Promise<Float32Array | null> {
 
 type AsrChunk = { text: string; timestamp: [number, number | null] };
 
+/**
+ * Transcribes each FILE once — the parts the timeline uses plus a little context, merged — rather than every clip on
+ * its own: Whisper guesses badly on 1–3 s snippets (Auto-Cut makes many). Only stretches with speech are sent, the
+ * output is cleaned of known hallucinations and loops, then words are placed onto every clip that shows them.
+ */
 async function transcribe(req: TranscribeRequest): Promise<void> {
   post({ type: 'progress', stage: 'download', progress: 0 });
   const asr = await loadModel(MODELS[req.model]);
+  const byPath = new Map<string, SpeechSource[]>();
+  for (const src of req.sources) {
+    if (src.outSec - src.inSec < 0.3) continue;
+    byPath.set(src.path, [...(byPath.get(src.path) ?? []), src]);
+  }
+  const jobs = [...byPath].flatMap(([path, clips]) => sourceRanges(clips).map((range) => ({ path, clips, range })));
   const words: TimedWord[] = [];
-  const sources = req.sources.filter((s) => s.outSec - s.inSec > 0.4);
-  for (let i = 0; i < sources.length; i++) {
-    const src = sources[i] as SpeechSource;
-    post({ type: 'progress', stage: 'audio', progress: i / sources.length });
-    const audio = await speechAudio(src);
+  for (let j = 0; j < jobs.length; j++) {
+    const { path, clips, range } = jobs[j] as (typeof jobs)[number];
+    post({ type: 'progress', stage: 'audio', progress: j / jobs.length });
+    const audio = await speechAudio({ path, inSec: range.from, outSec: range.to, timelineStart: 0, speed: 1 });
     if (!audio) continue;
-    post({ type: 'progress', stage: 'transcribe', progress: i / sources.length });
-    const result = (await asr(audio, {
-      return_timestamps: 'word',
-      chunk_length_s: 30,
-      stride_length_s: 5,
-      task: 'transcribe',
-      ...(req.language === 'auto' ? {} : { language: req.language }),
-    })) as { chunks?: AsrChunk[] };
-    const len = audio.length / SR;
-    for (const c of result.chunks ?? []) {
-      const text = c.text.trim();
-      if (!text) continue;
-      const s = Math.min(c.timestamp[0], len);
-      const e = Math.min(c.timestamp[1] ?? s + 0.3, len);
-      words.push({
-        text,
-        start: src.timelineStart + s / src.speed,
-        end: src.timelineStart + Math.max(e, s + 0.05) / src.speed,
-      });
+    post({ type: 'progress', stage: 'transcribe', progress: j / jobs.length });
+    const sourceWords: TimedWord[] = [];
+    for (const region of speechRegions(audio, SR)) {
+      const slice = audio.subarray(Math.floor(region.from * SR), Math.ceil(region.to * SR));
+      if (slice.length < 0.3 * SR) continue;
+      const result = (await asr(slice, {
+        return_timestamps: 'word',
+        chunk_length_s: 30,
+        stride_length_s: 5,
+        task: 'transcribe',
+        language: req.language,
+      })) as { chunks?: AsrChunk[] };
+      const len = slice.length / SR;
+      for (const c of result.chunks ?? []) {
+        const text = c.text.trim();
+        if (!text) continue;
+        const s0 = Math.min(c.timestamp[0], len);
+        const e0 = Math.min(c.timestamp[1] ?? s0 + 0.3, len);
+        const at = range.from + region.from;
+        sourceWords.push({ text, start: at + s0, end: at + Math.max(e0, s0 + 0.05) });
+      }
     }
+    words.push(...placeWords(cleanWords(sourceWords), clips));
   }
   words.sort((a, b) => a.start - b.start);
   post({ type: 'done', words });
