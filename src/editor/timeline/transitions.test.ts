@@ -60,5 +60,6 @@ describe('looks', () => {
     expect(warm?.temperature).toBeCloseTo(0.225);
     expect(warm?.exposure).toBeCloseTo(0.2);
     expect(lookParams({ filter: 'bw', amount: 1, adjust: {} })?.bw).toBe(1);
+    expect(lookParams({ filter: 'none', amount: 1, adjust: { brightness: 0.4 } })?.brightness).toBeCloseTo(0.4);
   });
 });

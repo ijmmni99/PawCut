@@ -14,6 +14,7 @@ export type LookParams = Adjust & {
 };
 
 export const ADJUST_KEYS: Array<keyof Adjust> = [
+  'brightness',
   'exposure',
   'contrast',
   'highlights',
@@ -28,6 +29,7 @@ export const ADJUST_KEYS: Array<keyof Adjust> = [
 ];
 
 export const ADJUST_LABELS: Record<keyof Adjust, string> = {
+  brightness: 'Brightness',
   exposure: 'Exposure',
   contrast: 'Contrast',
   highlights: 'Highlights',

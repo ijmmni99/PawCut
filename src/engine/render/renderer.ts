@@ -57,7 +57,7 @@ in vec2 v_disp;
 uniform sampler2D u_tex;
 uniform int u_transfer;
 uniform vec2 u_texel;
-uniform float u_exposure, u_contrast, u_highlights, u_shadows, u_saturation, u_vibrance;
+uniform float u_brightness, u_exposure, u_contrast, u_highlights, u_shadows, u_saturation, u_vibrance;
 uniform float u_temperature, u_tint, u_fade, u_sharpen, u_vignette, u_split, u_bw;
 uniform vec3 u_splitShadow, u_splitHighlight;
 out vec4 outColor;
@@ -74,6 +74,8 @@ void main() {
       c += (c - n) * u_sharpen * 2.0;
     }
     c *= exp2(u_exposure);
+    // Brightness: a mid-tone (gamma) curve, so whites and blacks stay put.
+    c = pow(max(c, 0.0), vec3(exp2(-u_brightness * 0.8)));
     c *= vec3(1.0 + 0.12 * u_temperature, 1.0 - 0.07 * u_tint, 1.0 - 0.12 * u_temperature);
     float l = clamp(dot(c, LUMA), 0.0, 1.0);
     c += u_shadows * 0.3 * (1.0 - l) * (1.0 - l) + u_highlights * 0.3 * l * l;
@@ -133,6 +135,7 @@ function link(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram 
 type Target = { fb: WebGLFramebuffer; tex: WebGLTexture; w: number; h: number };
 
 const LOOK_UNIFORMS = [
+  'brightness',
   'exposure',
   'contrast',
   'highlights',

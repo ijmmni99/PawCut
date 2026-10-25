@@ -122,6 +122,7 @@ export type FilterId =
 
 /** Manual adjustments, each roughly −1..1 (vignette, sharpen and fade 0..1). Missing = 0. */
 export type Adjust = {
+  brightness: number;
   exposure: number;
   contrast: number;
   highlights: number;
