@@ -72,6 +72,12 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   proxy by the import worker, backfilled on launch; loud = > −30 dBFS and > clip median + 8 dB), 0.15s attack /
   0.5s release. Timeline draws one row per audio track under the video; trims snap to cuts/playhead/beats.
   Auto-Cut "Cut on the beat" nudges cuts to the music's beats (`snapCutsToBeats`) and refits music after Apply.
+- **Voice changer** `src/engine/audio/voiceFx.ts` — 11 TikTok-style effects as plain-JS DSP (WSOLA time-stretch +
+  resample for pitch — a naive grain shifter was off by up to 3 semitones; ring mod, RBJ biquads, drive, delay,
+  Schroeder reverb, vibrato), peak-matched. `Clip.voiceFx` (video's own sound) is applied in the render worker after
+  the speed resample and in the preview worker per block (3 s first, then 15 s); `AudioClip.voiceFx` (voiceovers) via
+  `getClipBuffer` → processed AudioBuffer keyed `sourceId|fx` (`bufferKey`) for the shared overlay mix. Speech-to-text
+  always uses the untouched sound.
 - **Render (Phase 5)** `src/engine/render/renderer.ts` — ONE WebGL2 renderer for preview (HTMLCanvas) and export
   (OffscreenCanvas in the render worker). Pass 1 per layer: upload frame, rotate, HDR tone-map, look, letterbox
   (two compiled variants: plain, and `#define LOOK` — software GL and some GPUs don't skip uniform branches, which
