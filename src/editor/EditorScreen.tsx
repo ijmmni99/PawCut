@@ -487,6 +487,7 @@ export function EditorScreen({ projectId }: { projectId: string }) {
             <ToolButton icon="split" label="Split" onClick={split} disabled={!hasTarget} />
             <ToolButton icon="speed" label="Speed" onClick={openSpeed} disabled={!hasTarget} />
             <ToolButton icon="volume" label="Volume" onClick={openVolume} disabled={!hasTarget} />
+            <ToolButton icon="voice" label="Voice FX" onClick={openVolume} disabled={!hasTarget} />
             <ToolButton icon="copy" label="Duplicate" onClick={duplicate} disabled={!hasTarget} />
             <ToolButton icon="trash" label="Delete" onClick={remove} disabled={!hasTarget} />
           </>
@@ -515,7 +516,17 @@ export function EditorScreen({ projectId }: { projectId: string }) {
             }}
           />
         )}
-        {sheet === 'audioClip' && <AudioClipSheet open onClose={closeSheet} clipId={selectedAudioId} />}
+        {sheet === 'audioClip' && (
+          <AudioClipSheet
+            open
+            onClose={closeSheet}
+            clipId={selectedAudioId}
+            onPreview={(from) => {
+              playerRef.current?.pause();
+              playerRef.current?.play({ from, to: from + 4 });
+            }}
+          />
+        )}
         {sheet === 'text' && <TextSheet open onClose={closeSheet} textId={selectedTextId} focus={textFocus} />}
         {sheet === 'captions' && <CaptionsSheet open onClose={closeSheet} />}
         {sheet === 'transition' && (
@@ -530,7 +541,18 @@ export function EditorScreen({ projectId }: { projectId: string }) {
           />
         )}
         {sheet === 'filters' && <FilterSheet open onClose={closeSheet} clipIds={filterTargets} />}
-        {sheet === 'volume' && <ClipVolumeSheet open onClose={closeSheet} clipIds={volumeTargets} />}
+        {sheet === 'volume' && (
+          <ClipVolumeSheet
+            open
+            onClose={closeSheet}
+            clipIds={volumeTargets}
+            onPreview={() => {
+              const t = usePlayback.getState().time;
+              playerRef.current?.pause();
+              playerRef.current?.play({ from: t, to: t + 3 });
+            }}
+          />
+        )}
       </Suspense>
     </div>
   );

@@ -20,6 +20,7 @@ const PATHS = {
   volume: 'M11 5L6 9H2v6h4l5 4zM15.5 8.5a5 5 0 010 7M19 5a10 10 0 010 14',
   text: 'M5 7V4h14v3M12 4v16M8.5 20h7',
   captions: 'M3 5h18v14H3zM10.5 10.2a2.2 2.2 0 100 3.6M17.5 10.2a2.2 2.2 0 100 3.6',
+  voice: 'M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0',
   filter: 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 3v18M12 8.5l6.4-3.7M12 15.5l6.4 3.7',
   transition: 'M3 6h7v12H3zM14 6h7v12h-7zM10 12h4M12 10l2 2-2 2',
   frame: 'M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4',

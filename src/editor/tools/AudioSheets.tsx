@@ -3,8 +3,39 @@ import { Sheet } from '../../app/ui/Sheet';
 import { useLibrary } from '../../library/audioLibrary';
 import { useEditor } from '../store';
 import { audioDuration, mixOf, setMix, updateAudioClip } from '../timeline/audio';
-import { type AudioClip, setClipVolume } from '../timeline/model';
+import { VOICE_FX, type VoiceFxId } from '../../engine/audio/voiceFx';
+import { type AudioClip, setClipVoiceFx, setClipVolume } from '../timeline/model';
 import { OffsetPicker } from './OffsetPicker';
+
+/** Voice changer picker (None + the TikTok-style effects). */
+function VoiceFxChips({ value, onPick }: { value: VoiceFxId | undefined; onPick(fx: VoiceFxId | null): void }) {
+  return (
+    <div>
+      <div className="mb-1.5 text-xs font-semibold text-zinc-400">Voice changer</div>
+      <div className="grid grid-cols-4 gap-1.5">
+        <button
+          type="button"
+          onClick={() => onPick(null)}
+          className={`flex min-h-14 flex-col items-center justify-center rounded-xl text-[11px] font-semibold ${!value ? 'bg-zinc-100 text-black' : 'bg-zinc-800'}`}
+        >
+          <span className="text-lg">🗣️</span>
+          Normal
+        </button>
+        {VOICE_FX.map((fx) => (
+          <button
+            key={fx.id}
+            type="button"
+            onClick={() => onPick(fx.id)}
+            className={`flex min-h-14 flex-col items-center justify-center rounded-xl text-[11px] font-semibold ${value === fx.id ? 'bg-pink-500' : 'bg-zinc-800'}`}
+          >
+            <span className="text-lg">{fx.icon}</span>
+            {fx.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function Slider({
   label,
@@ -51,7 +82,18 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
 const secs = (v: number) => `${v.toFixed(1)}s`;
 
 /** Volume, fades and (music) ducking + start offset for the selected audio clip. */
-export function AudioClipSheet({ open, onClose, clipId }: { open: boolean; onClose(): void; clipId: string | null }) {
+export function AudioClipSheet({
+  open,
+  onClose,
+  clipId,
+  onPreview,
+}: {
+  open: boolean;
+  onClose(): void;
+  clipId: string | null;
+  /** Play a few seconds from timeline time `from` (to hear a voice effect). */
+  onPreview?(from: number): void;
+}) {
   const project = useEditor((s) => s.project);
   const apply = useEditor((s) => s.apply);
   const clip = project?.audio?.find((c) => c.id === clipId);
@@ -68,6 +110,15 @@ export function AudioClipSheet({ open, onClose, clipId }: { open: boolean; onClo
         <Slider label="Volume" value={clip.volume} min={0} max={2} step={0.01} format={pct} onChange={(v) => set({ volume: v })} />
         <Slider label="Fade in" value={clip.fadeIn} min={0} max={Math.min(5, len / 2)} step={0.1} format={secs} onChange={(v) => set({ fadeIn: v })} />
         <Slider label="Fade out" value={clip.fadeOut} min={0} max={Math.min(5, len / 2)} step={0.1} format={secs} onChange={(v) => set({ fadeOut: v })} />
+        {clip.track === 'voice' && (
+          <VoiceFxChips
+            value={clip.voiceFx}
+            onPick={(fx) => {
+              set({ voiceFx: fx ?? undefined });
+              onPreview?.(clip.start);
+            }}
+          />
+        )}
         {clip.track === 'music' && (
           <>
             <label className="flex min-h-11 items-center justify-between text-sm">
@@ -116,7 +167,18 @@ export function AudioClipSheet({ open, onClose, clipId }: { open: boolean; onClo
 }
 
 /** Original-sound volume / mute for the video clips the tools target. */
-export function ClipVolumeSheet({ open, onClose, clipIds }: { open: boolean; onClose(): void; clipIds: string[] }) {
+export function ClipVolumeSheet({
+  open,
+  onClose,
+  clipIds,
+  onPreview,
+}: {
+  open: boolean;
+  onClose(): void;
+  clipIds: string[];
+  /** Play a few seconds from the playhead (to hear a voice effect). */
+  onPreview?(): void;
+}) {
   const project = useEditor((s) => s.project);
   const apply = useEditor((s) => s.apply);
   const allIds = project?.main.map((c) => c.id) ?? [];
@@ -155,6 +217,13 @@ export function ClipVolumeSheet({ open, onClose, clipIds }: { open: boolean; onC
         >
           {volume > 0 ? (scope === 'all' ? 'Mute all clips' : 'Mute original sound') : scope === 'all' ? 'Unmute all clips' : 'Unmute'}
         </button>
+        <VoiceFxChips
+          value={first?.voiceFx}
+          onPick={(fx) => {
+            apply((p) => setClipVoiceFx(p, ids, fx));
+            onPreview?.();
+          }}
+        />
       </div>
     </Sheet>
   );
