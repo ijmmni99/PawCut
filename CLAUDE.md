@@ -96,7 +96,8 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   render worker rebuilds the same plan and `drawOps` onto each frame. Fonts: 6 OFL fonts from Fontsource
   (latin+latin-ext woff2, precached), CJK/emoji fall back to system fonts. Timeline shows Text + Captions rows.
 - **Speech-to-text** `src/ai/captions/` — Transformers.js v4 Whisper (`onnx-community/whisper-base_timestamped`, q8,
-  ~77 MB, cached by Transformers.js in Cache API). Served from OUR origin: `scripts/fetch-whisper.mjs` (prebuild,
+  ~77 MB; "Best quality" = `whisper-small_timestamped`, ~250 MB, ~3× slower, picked in the sheet and remembered in
+  localStorage; cached by Transformers.js in Cache API). Served from OUR origin: `scripts/fetch-whisper.mjs` (prebuild,
   gitignored output) downloads it into `public/models/whisper/` split into ≤20 MB parts + `parts.json`; the worker's
   `env.fetch` maps Hugging Face URLs to those parts (with retries) and falls back to Hugging Face when absent —
   iPhone Safari failed the cross-origin download instantly ("Load failed") in `transcribe.worker.ts`, device `wasm` with

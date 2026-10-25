@@ -12,6 +12,7 @@ declare const self: DedicatedWorkerGlobalScope;
 const SR = 16_000;
 const MODELS = {
   base: 'onnx-community/whisper-base_timestamped',
+  small: 'onnx-community/whisper-small_timestamped',
   tiny: 'onnx-community/whisper-tiny_timestamped',
 } as const;
 

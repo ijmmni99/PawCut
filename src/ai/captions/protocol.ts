@@ -18,8 +18,8 @@ export type TranscribeRequest = {
   type: 'transcribe';
   sources: SpeechSource[];
   language: CaptionLanguage;
-  /** 'base' for real use; 'tiny' keeps automated tests quick. */
-  model: 'base' | 'tiny';
+  /** 'base' = Fast, 'small' = Best quality; 'tiny' keeps automated tests quick. */
+  model: 'base' | 'small' | 'tiny';
 };
 
 export type TimedWord = { text: string; start: number; end: number };

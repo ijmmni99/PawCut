@@ -28,12 +28,32 @@ export function speechSources(p: Project): SpeechSource[] {
   return out;
 }
 
+export type CaptionQuality = 'fast' | 'best';
+
 /** Tests pass ?whisper=tiny for a quicker model. */
-const MODEL: TranscribeRequest['model'] = new URLSearchParams(location.search).get('whisper') === 'tiny' ? 'tiny' : 'base';
+const TEST_TINY = new URLSearchParams(location.search).get('whisper') === 'tiny';
+const QUALITY_KEY = 'pawcut.captionQuality';
+
+export function savedQuality(): CaptionQuality {
+  try {
+    return localStorage.getItem(QUALITY_KEY) === 'best' ? 'best' : 'fast';
+  } catch {
+    return 'fast';
+  }
+}
+
+export function saveQuality(q: CaptionQuality): void {
+  try {
+    localStorage.setItem(QUALITY_KEY, q);
+  } catch {
+    // Private mode: just not remembered.
+  }
+}
 
 export function transcribe(
   sources: SpeechSource[],
   language: CaptionLanguage,
+  quality: CaptionQuality,
   onProgress: (stage: 'download' | 'audio' | 'transcribe', progress: number) => void,
 ): Promise<TimedWord[]> {
   worker ??= new Worker(new URL('./transcribe.worker.ts', import.meta.url), { type: 'module' });
@@ -50,7 +70,8 @@ export function transcribe(
       worker = null;
       reject(new Error(e.message || 'Speech recognition stopped unexpectedly.'));
     };
-    const request: TranscribeRequest = { type: 'transcribe', sources, language, model: MODEL };
+    const model = TEST_TINY ? 'tiny' : quality === 'best' ? 'small' : 'base';
+    const request: TranscribeRequest = { type: 'transcribe', sources, language, model };
     w.postMessage(request);
   });
 }

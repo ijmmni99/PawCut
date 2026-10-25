@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { formatDuration } from '../../app/share';
 import { Sheet } from '../../app/ui/Sheet';
 import type { CaptionLanguage } from '../../ai/captions/protocol';
-import { speechSources, transcribe } from '../../ai/captions/transcribeClient';
+import { type CaptionQuality, saveQuality, savedQuality, speechSources, transcribe } from '../../ai/captions/transcribeClient';
 import {
   CAPTION_PRESETS,
   CAPTION_PRESET_IDS,
@@ -31,6 +31,31 @@ function stageLabel(job: NonNullable<Job>): string {
   if (job.stage === 'download') return `Downloading speech model (first time only)… ${Math.round(job.progress * 100)}%`;
   if (job.stage === 'audio') return 'Reading audio…';
   return 'Listening…';
+}
+
+/** Fast = whisper-base (~80 MB); Best = whisper-small (~250 MB, about 3× slower, much better Malay). */
+function QualityToggle({ value, onPick, disabled }: { value: CaptionQuality; onPick(q: CaptionQuality): void; disabled?: boolean }) {
+  return (
+    <div className="grid grid-cols-2 gap-1 rounded-xl bg-zinc-800 p-1">
+      {(
+        [
+          ['fast', 'Fast', '80 MB'],
+          ['best', 'Best quality', '250 MB · slower'],
+        ] as const
+      ).map(([id, label, note]) => (
+        <button
+          key={id}
+          type="button"
+          disabled={disabled}
+          onClick={() => onPick(id)}
+          className={`flex min-h-11 flex-col items-center justify-center rounded-lg text-xs font-semibold ${value === id ? 'bg-zinc-100 text-black' : 'text-zinc-300'}`}
+        >
+          {label}
+          <span className={`text-[10px] font-normal ${value === id ? 'text-zinc-600' : 'text-zinc-500'}`}>{note}</span>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function PresetChips({ value, onPick }: { value: CaptionPreset; onPick(p: CaptionPreset): void }) {
@@ -69,6 +94,11 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
   const captions = useEditor((s) => s.project?.captions ?? null);
   const [preset, setPreset] = useState<CaptionPreset>('wordPop');
   const [job, setJob] = useState<Job>(null);
+  const [quality, setQuality] = useState<CaptionQuality>(savedQuality);
+  const pickQuality = (q: CaptionQuality) => {
+    setQuality(q);
+    saveQuality(q);
+  };
   const [error, setError] = useState<string | null>(null);
   const [typing, setTyping] = useState(false);
   const [typed, setTyped] = useState('');
@@ -95,7 +125,7 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
     setJob({ stage: 'download', progress: 0 });
     try {
       const lang: CaptionLanguage = 'malay';
-      const words = await transcribe(sources, lang, (stage, progress) => setJob({ stage, progress }));
+      const words = await transcribe(sources, lang, quality, (stage, progress) => setJob({ stage, progress }));
       if (words.length === 0) {
         setError("Couldn't hear any speech. Type captions instead.");
         return;
@@ -126,7 +156,13 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
   return (
     <Sheet open={open} onClose={onClose} title="Captions" dismissible={job === null}>
       {captions ? (
-        <CaptionEditor captions={captions} onChange={apply} busy={job !== null} onRegenerate={() => void generate(captions)} />
+        <CaptionEditor
+          captions={captions}
+          onChange={apply}
+          busy={job !== null}
+          onRegenerate={() => void generate(captions)}
+          quality={<QualityToggle value={quality} onPick={pickQuality} disabled={job !== null} />}
+        />
       ) : (
         <div className="flex flex-col gap-3 pb-1">
           <PresetChips value={preset} onPick={setPreset} />
@@ -146,6 +182,7 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
             </>
           ) : (
             <>
+              <QualityToggle value={quality} onPick={pickQuality} disabled={job !== null} />
               <button
                 type="button"
                 onClick={() => void generate()}
@@ -171,7 +208,8 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
                 Type captions instead
               </button>
               <p className="text-[11px] text-zinc-500">
-                Speech recognition runs on your phone. The model (~80 MB) downloads once, then works offline.
+                Speech recognition runs on your phone. The model ({quality === 'best' ? '~250 MB' : '~80 MB'}) downloads once,
+                then works offline. Use Wi-Fi and keep PawCut open the first time.
               </p>
             </>
           )}
@@ -189,11 +227,14 @@ function CaptionEditor({
   onChange,
   busy,
   onRegenerate,
+  quality,
 }: {
   captions: Captions;
   onChange(c: Captions | null): void;
   busy: boolean;
   onRegenerate(): void;
+  /** Fast / Best toggle, shown next to Re-listen. */
+  quality: React.ReactNode;
 }) {
   const chunks = useMemo(() => captionChunks(captions), [captions]);
   const [splitting, setSplitting] = useState<number | null>(null);
@@ -315,6 +356,7 @@ function CaptionEditor({
         })}
       </ul>
 
+      {quality}
       <div className="grid grid-cols-2 gap-2">
         <button type="button" onClick={onRegenerate} disabled={busy} className="min-h-11 rounded-xl bg-zinc-800 text-sm font-semibold disabled:opacity-40">
           Re-listen
