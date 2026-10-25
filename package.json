@@ -6,7 +6,7 @@
   "scripts": {
     "predev": "node scripts/copy-runtimes.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/copy-runtimes.mjs",
+    "prebuild": "node scripts/copy-runtimes.mjs && node scripts/fetch-whisper.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",

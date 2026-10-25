@@ -8,3 +8,4 @@ playwright-report
 e2e/fixtures
 public/mediapipe
 public/ort
+public/models/whisper

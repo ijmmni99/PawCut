@@ -75,7 +75,10 @@ export default defineConfig({
         // AI runtimes/models are big: cached on first use instead of at install.
         runtimeCaching: [
           {
-            urlPattern: ({ url }) => url.pathname.startsWith('/mediapipe/') || url.pathname.startsWith('/models/') || url.pathname.startsWith('/ort/'),
+            urlPattern: ({ url }) => url.pathname.startsWith('/mediapipe/') ||
+              url.pathname.startsWith('/ort/') ||
+              // Whisper is cached by Transformers.js itself (assembled from its parts); don't keep a second copy.
+              (url.pathname.startsWith('/models/') && !url.pathname.startsWith('/models/whisper/')),
             handler: 'CacheFirst',
             options: { cacheName: 'ai-models', expiration: { maxEntries: 20 } },
           },

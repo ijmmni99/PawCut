@@ -25,6 +25,57 @@ if (onnx.wasm) {
 }
 env.allowLocalModels = false;
 
+// ---- model download: from our own origin (split into parts, see scripts/fetch-whisper.mjs), with retries ----
+
+const HF = /^https:\/\/huggingface\.co\/onnx-community\/([\w.-]+)\/resolve\/[^/]+\/(.+)$/;
+type Parts = Record<string, { size: number; parts: number }>;
+const manifests = new Map<string, Promise<Parts | null>>();
+
+function manifestFor(model: string): Promise<Parts | null> {
+  let m = manifests.get(model);
+  if (!m) {
+    m = fetch(`/models/whisper/${model}/parts.json`)
+      .then((r) => (r.ok ? (r.json() as Promise<Parts>) : null))
+      .catch(() => null);
+    manifests.set(model, m);
+  }
+  return m;
+}
+
+/** fetch with retries (a flaky mobile connection shouldn't fail captions). Errors name the file. */
+async function fetchRetry(url: string, init?: RequestInit): Promise<Response> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const res = await fetch(url, init);
+      if (res.ok || res.status === 404) return res;
+      last = new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      last = err;
+    }
+    await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+  }
+  const name = url.split('?')[0]?.split('/').slice(-2).join('/');
+  throw new Error(`Couldn't download ${name}: ${last instanceof Error ? last.message : String(last)}`);
+}
+
+env.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const hit = HF.exec(url);
+  const parts = hit ? await manifestFor(hit[1] as string) : null;
+  const entry = hit && parts ? parts[hit[2] as string] : undefined;
+  if (!hit || !entry) return fetchRetry(url, init);
+  const base = `/models/whisper/${hit[1]}/${hit[2]}`;
+  const blobs: Blob[] = [];
+  for (let i = 0; i < entry.parts; i++) {
+    const res = await fetchRetry(entry.parts === 1 ? base : `${base}.part${i}`);
+    if (!res.ok) throw new Error(`Couldn't download ${hit[2]} (HTTP ${res.status})`);
+    blobs.push(await res.blob());
+  }
+  const body = new Blob(blobs);
+  return new Response(body, { status: 200, headers: { 'content-length': String(body.size) } });
+}) as typeof env.fetch;
+
 let loaded: { model: string; asr: Promise<AutomaticSpeechRecognitionPipeline> } | null = null;
 
 function loadModel(model: string): Promise<AutomaticSpeechRecognitionPipeline> {
