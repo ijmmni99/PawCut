@@ -23,6 +23,7 @@ import { FRAME_W, buildPlan, layoutAt } from '../../editor/overlay/plan';
 import { type Asset, type Clip, type Project, clipDuration, clipStarts, locate } from '../../editor/timeline/model';
 import { clipWindow, cutsWithTransitions, sourceTime, transitionAt } from '../../editor/timeline/transitions';
 import { type Pcm, applyEdgeFades, renderSpeedResampled } from '../audio/resample';
+import { applyVoiceFx } from '../audio/voiceFx';
 import { type TransferCode, trackTransfer } from '../media/hdr';
 import { lookParams } from '../render/looks';
 import { type Layer, type Renderer, containRect, createRenderer } from '../render/renderer';
@@ -102,6 +103,7 @@ async function addClipAudio(
     }
     applyEdgeFades(out, 0, frameCount, Math.round(FADE_SEC * rate));
     if (volume !== 1) for (const ch of out) for (let i = 0; i < frameCount; i++) ch[i] = (ch[i] as number) * volume;
+    if (clip.voiceFx) applyVoiceFx(out, rate, clip.voiceFx).forEach((ch, c) => out[c]?.set(ch));
   }
   // Add the pre-mixed music / SFX / voice for this stretch of the timeline.
   if (overlay) {

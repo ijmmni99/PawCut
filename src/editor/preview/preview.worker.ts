@@ -4,6 +4,7 @@
 // already decoded before they're reached. During a transition the two clips' streams interleave (incoming = slot 1).
 // Credit-based backpressure keeps only a handful of frames in flight.
 import { ALL_FORMATS, AudioSampleSink, BlobSource, Input, type VideoSample, VideoSampleSink } from 'mediabunny';
+import { type VoiceFxId, applyVoiceFx } from '../../engine/audio/voiceFx';
 import { type TransferCode, trackTransfer } from '../../engine/media/hdr';
 import { readFile } from '../../engine/storage/opfs';
 import { type Asset, type Clip, type Project, clipDuration } from '../timeline/model';
@@ -18,6 +19,8 @@ const FRAME_CREDITS = 16;
 const AUDIO_AHEAD_SEC = 4;
 /** Audio is posted in chunks of about this length. */
 const AUDIO_CHUNK_SEC = 0.5;
+/** Clip sound with a voice effect is processed in blocks of this length. */
+const FX_BLOCK_SEC = 15;
 /** At >1× speed, frames closer together than this (timeline seconds) are dropped. */
 const MIN_FRAME_GAP = 1 / 40;
 
@@ -289,8 +292,7 @@ async function streamAudio(myGen: number, from: number): Promise<void> {
     let pendingStart = 0;
     let rate = track.sampleRate;
 
-    const flush = () => {
-      if (pendingFrames === 0) return;
+    const combine = () => {
       const channelCount = pending[0]?.length ?? 1;
       const channels = Array.from({ length: channelCount }, () => new Float32Array(pendingFrames));
       let off = 0;
@@ -298,6 +300,33 @@ async function streamAudio(myGen: number, from: number): Promise<void> {
         for (let c = 0; c < channelCount; c++) channels[c]?.set(part[c] ?? (part[0] as Float32Array), off);
         off += part[0]?.length ?? 0;
       }
+      return channels;
+    };
+    // A short first block so effected sound starts promptly, then longer ones.
+    let fxBlockSec = 3;
+    /** Applies the voice effect to everything pending and posts it in paced chunks. False if playback stopped. */
+    const postFx = async (fx: VoiceFxId): Promise<boolean> => {
+      if (pendingFrames === 0) return true;
+      const processed = applyVoiceFx(combine(), rate, fx);
+      const blockStart = pendingStart;
+      const frames = pendingFrames;
+      pending = [];
+      pendingFrames = 0;
+      const chunk = Math.round(AUDIO_CHUNK_SEC * rate);
+      for (let off = 0; off < frames; off += chunk) {
+        const t = start + (blockStart + off / rate - clip.inSec) / clip.speed;
+        if (!(await waitUntil(myGen, () => t < clock + AUDIO_AHEAD_SEC))) return false;
+        const channels = processed.map((ch) => ch.slice(off, off + chunk));
+        post(
+          { type: 'audio', gen: myGen, t, speed: clip.speed, volume: clip.volume ?? 1, sampleRate: rate, channels },
+          channels.map((c) => c.buffer as ArrayBuffer),
+        );
+      }
+      return true;
+    };
+    const flush = () => {
+      if (pendingFrames === 0) return;
+      const channels = combine();
       const t = start + (pendingStart - clip.inSec) / clip.speed;
       post(
         { type: 'audio', gen: myGen, t, speed: clip.speed, volume: clip.volume ?? 1, sampleRate: rate, channels },
@@ -328,12 +357,21 @@ async function streamAudio(myGen: number, from: number): Promise<void> {
       } finally {
         sample.close();
       }
+      // A voice effect needs longer stretches (echo tails, pitch grains): processed in blocks.
+      if (clip.voiceFx) {
+        if (pendingFrames >= fxBlockSec * rate) {
+          if (!(await postFx(clip.voiceFx))) return;
+          fxBlockSec = FX_BLOCK_SEC;
+        }
+        continue;
+      }
       if (pendingFrames >= AUDIO_CHUNK_SEC * rate) {
         const chunkT = start + (pendingStart - clip.inSec) / clip.speed;
         if (!(await waitUntil(myGen, () => chunkT < clock + AUDIO_AHEAD_SEC))) return;
         flush();
       }
     }
+    if (clip.voiceFx && !(await postFx(clip.voiceFx))) return;
     flush();
   }
 }

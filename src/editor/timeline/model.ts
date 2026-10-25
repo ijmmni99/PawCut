@@ -1,6 +1,8 @@
 // Timeline data model: plain serializable JSON plus pure operations.
 // Preview and export both render from a Project, so every edit goes through these functions.
 
+import type { VoiceFxId } from '../../engine/audio/voiceFx';
+
 export type AssetStatus = 'importing' | 'ready' | 'error';
 
 export type Asset = {
@@ -73,6 +75,8 @@ export type Clip = {
   transition?: ClipTransition;
   /** Filter preset + manual adjustments. */
   look?: Look;
+  /** Voice changer on the clip's own sound. */
+  voiceFx?: VoiceFxId;
 };
 
 export type TransitionKind =
@@ -233,6 +237,8 @@ export type AudioClip = {
   volume: number;
   fadeIn: number;
   fadeOut: number;
+  /** Voice changer (voiceovers). */
+  voiceFx?: VoiceFxId;
 };
 
 export type MixSettings = {
@@ -381,6 +387,18 @@ export function setClipVolume(project: Project, clipIds: ReadonlySet<string>, vo
   return replaceMain(
     project,
     project.main.map((c) => (clipIds.has(c.id) ? { ...c, volume: v } : c)),
+  );
+}
+
+export function setClipVoiceFx(project: Project, clipIds: ReadonlySet<string>, fx: VoiceFxId | null): Project {
+  return replaceMain(
+    project,
+    project.main.map((c) => {
+      if (!clipIds.has(c.id)) return c;
+      if (fx) return { ...c, voiceFx: fx };
+      const { voiceFx: _drop, ...rest } = c;
+      return rest;
+    }),
   );
 }
 

@@ -4,8 +4,8 @@ import { Sheet } from '../app/ui/Sheet';
 import { codecProfile } from '../engine/codecProfile';
 import { type ExportHandle, startRender } from '../engine/export/exportClient';
 import { type RenderEvent, TIKTOK_1080P30 } from '../engine/export/protocol';
-import { renderOverlay } from '../engine/audio/overlay';
-import { getAudioBuffer } from '../library/audioLibrary';
+import { bufferKey, renderOverlay } from '../engine/audio/overlay';
+import { getClipBuffer } from '../library/audioLibrary';
 import { buildPlan } from './overlay/plan';
 import { rasterize } from './overlay/sprites';
 import { audioClips, duckEnvelope } from './timeline/audio';
@@ -76,9 +76,11 @@ export function ExportSheet({ open, onClose }: { open: boolean; onClose(): void 
       const clips = audioClips(project);
       if (clips.length > 0) {
         const buffers = new Map<string, AudioBuffer>();
-        for (const id of new Set(clips.map((c) => c.sourceId))) {
-          const buffer = await getAudioBuffer(id).catch(() => null);
-          if (buffer) buffers.set(id, buffer);
+        for (const clip of clips) {
+          const key = bufferKey(clip);
+          if (buffers.has(key)) continue;
+          const buffer = await getClipBuffer(clip.sourceId, clip.voiceFx).catch(() => null);
+          if (buffer) buffers.set(key, buffer);
         }
         const loudness = Object.fromEntries(Object.values(assets).map((a) => [a.id, a.loudness]));
         overlay = await renderOverlay(

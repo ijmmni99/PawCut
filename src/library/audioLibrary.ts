@@ -4,6 +4,7 @@
 import { create } from 'zustand';
 import { detectTempo, encodeWav, mixToMono, waveformPeaks } from '../engine/audio/analysis';
 import { SFX_RECIPES, SFX_SAMPLE_RATE, SFX_VERSION, renderSfx } from '../engine/audio/sfx';
+import { type VoiceFxId, applyVoiceFx } from '../engine/audio/voiceFx';
 import { writeFile } from '../engine/storage/fileClient';
 import { readFile, removeEntry } from '../engine/storage/opfs';
 import { newId } from '../editor/timeline/model';
@@ -80,6 +81,25 @@ export function getAudioBuffer(id: string): Promise<AudioBuffer> {
 
 function channelsOf(buffer: AudioBuffer): Float32Array[] {
   return Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
+}
+
+const withFx = new Map<string, Promise<AudioBuffer>>();
+
+/** A library item's audio with a voice effect applied (cached per item + effect). */
+export function getClipBuffer(id: string, fx: VoiceFxId | undefined): Promise<AudioBuffer> {
+  if (!fx) return getAudioBuffer(id);
+  const key = `${id}|${fx}`;
+  let p = withFx.get(key);
+  if (!p) {
+    p = getAudioBuffer(id).then((b) => {
+      const out = new AudioBuffer({ length: b.length, numberOfChannels: b.numberOfChannels, sampleRate: b.sampleRate });
+      applyVoiceFx(channelsOf(b), b.sampleRate, fx).forEach((ch, c) => out.copyToChannel(ch as Float32Array<ArrayBuffer>, c));
+      return out;
+    });
+    p.catch(() => withFx.delete(key));
+    withFx.set(key, p);
+  }
+  return p;
 }
 
 function extensionOf(name: string, fallback: string): string {

@@ -4,8 +4,8 @@
 // seamless (no element switching or play() start-up latency, which is what made <video>-based cuts stutter on iOS).
 // While paused, scrubbing requests single stills; the worker only decodes the latest request.
 import { setAudioSession } from '../../engine/audioSession';
-import { scheduleOverlay } from '../../engine/audio/overlay';
-import { getAudioBuffer } from '../../library/audioLibrary';
+import { bufferKey, scheduleOverlay } from '../../engine/audio/overlay';
+import { getClipBuffer } from '../../library/audioLibrary';
 import { audioClips, duckEnvelope } from '../timeline/audio';
 import { useAssets, useEditor, usePlayback } from '../store';
 import { lookParams, type LookParams } from '../../engine/render/looks';
@@ -127,9 +127,10 @@ export class PreviewPlayer {
     const project = useEditor.getState().project;
     if (!project) return;
     for (const clip of audioClips(project)) {
-      if (this.audioBuffers.has(clip.sourceId)) continue;
-      void getAudioBuffer(clip.sourceId).then(
-        (b) => this.audioBuffers.set(clip.sourceId, b),
+      const key = bufferKey(clip);
+      if (this.audioBuffers.has(key)) continue;
+      void getClipBuffer(clip.sourceId, clip.voiceFx).then(
+        (b) => this.audioBuffers.set(key, b),
         () => undefined,
       );
     }

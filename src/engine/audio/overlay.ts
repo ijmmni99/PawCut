@@ -1,7 +1,7 @@
 // Schedules the audio tracks (music / SFX / voiceover) into any Web Audio context. The same function drives live
 // preview (AudioContext) and export (OfflineAudioContext), so what you hear is exactly what gets rendered.
 import { DUCK_STEP, audioClips, audioEnd, clipGainAt, envelopeAt } from '../../editor/timeline/audio';
-import type { Project } from '../../editor/timeline/model';
+import type { AudioClip, Project } from '../../editor/timeline/model';
 
 /** Gain automation resolution, seconds. */
 const CURVE_STEP = 0.05;
@@ -19,6 +19,11 @@ export type OverlayInputs = {
  * on context time `ctxStart`. `until` (timeline seconds) cuts everything off at the end of the video.
  * Returns the source nodes so playback can stop them.
  */
+/** Key of a clip's (possibly voice-changed) audio in `buffers`. */
+export function bufferKey(clip: Pick<AudioClip, 'sourceId' | 'voiceFx'>): string {
+  return clip.voiceFx ? `${clip.sourceId}|${clip.voiceFx}` : clip.sourceId;
+}
+
 export function scheduleOverlay(
   ctx: BaseAudioContext,
   destination: AudioNode,
@@ -29,7 +34,7 @@ export function scheduleOverlay(
 ): AudioBufferSourceNode[] {
   const nodes: AudioBufferSourceNode[] = [];
   for (const clip of audioClips(project)) {
-    const buffer = buffers.get(clip.sourceId);
+    const buffer = buffers.get(bufferKey(clip));
     const begin = Math.max(from, clip.start);
     const end = Math.min(audioEnd(clip), until);
     if (!buffer || end - begin < 0.01) continue;
