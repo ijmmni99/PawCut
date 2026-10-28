@@ -20,6 +20,8 @@ export type TranscribeRequest = {
   language: CaptionLanguage;
   /** 'base' = Fast, 'small' = Best quality; 'tiny' keeps automated tests quick. */
   model: 'base' | 'small' | 'tiny';
+  /** Vocabulary hint for Whisper ("prompt"): names and the English words mixed into the Malay. */
+  prompt?: string;
 };
 
 export type TimedWord = { text: string; start: number; end: number };

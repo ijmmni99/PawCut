@@ -54,6 +54,7 @@ export function transcribe(
   sources: SpeechSource[],
   language: CaptionLanguage,
   quality: CaptionQuality,
+  prompt: string,
   onProgress: (stage: 'download' | 'audio' | 'transcribe', progress: number) => void,
 ): Promise<TimedWord[]> {
   worker ??= new Worker(new URL('./transcribe.worker.ts', import.meta.url), { type: 'module' });
@@ -71,7 +72,7 @@ export function transcribe(
       reject(new Error(e.message || 'Speech recognition stopped unexpectedly.'));
     };
     const model = TEST_TINY ? 'tiny' : quality === 'best' ? 'small' : 'base';
-    const request: TranscribeRequest = { type: 'transcribe', sources, language, model };
+    const request: TranscribeRequest = { type: 'transcribe', sources, language, model, prompt };
     w.postMessage(request);
   });
 }

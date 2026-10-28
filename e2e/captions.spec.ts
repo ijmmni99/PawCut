@@ -77,6 +77,16 @@ test('speech → word-pop captions in 2 taps → text → export', async ({ page
   const at = (spoken.start + spoken.end) / 2;
   // Transcript editor lists the captions; restyle in one tap.
   await expect(page.getByRole('textbox', { name: 'Caption 1', exact: true })).toBeVisible();
+  // Fixing a word is applied everywhere and remembered for the next transcription.
+  const first = page.getByRole('textbox', { name: 'Caption 1', exact: true });
+  const original = await first.inputValue();
+  const tokens = original.split(/\s+/);
+  const wrong = tokens[0]!.replace(/[^\p{L}\p{N}]/gu, '');
+  await first.fill(['Luna', ...tokens.slice(1)].join(' '));
+  await first.press('Tab');
+  await expect.poll(async () => (await project(page))?.captions?.words[0]?.text.replace(/[^\p{L}]/gu, '')).toBe('Luna');
+  const fixes = await page.evaluate(() => JSON.parse(localStorage.getItem('pawcut.captionFixes') ?? '{}') as Record<string, string>);
+  expect(fixes[wrong.toLowerCase()]).toBe('Luna');
   await page.getByRole('button', { name: /Karaoke/ }).click();
   expect((await project(page))?.captions?.preset).toBe('karaoke');
   await page.mouse.click(5, 5);

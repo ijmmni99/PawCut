@@ -6,6 +6,7 @@ import { formatDuration } from '../../app/share';
 import { Sheet } from '../../app/ui/Sheet';
 import type { CaptionLanguage } from '../../ai/captions/protocol';
 import { type CaptionQuality, saveQuality, savedQuality, speechSources, transcribe } from '../../ai/captions/transcribeClient';
+import { applyFixes, buildPrompt, learnFixes, rememberFixes, saveWords, savedFixes, savedWords } from '../../ai/captions/vocab';
 import {
   CAPTION_PRESETS,
   CAPTION_PRESET_IDS,
@@ -18,6 +19,7 @@ import {
   removeChunk,
   setChunkText,
   splitBefore,
+  tokenize,
 } from '../overlay/captions';
 import { FONTS, loadFont } from '../overlay/fonts';
 import { CAPTIONS_ID, setCaptions } from '../overlay/textOps';
@@ -95,6 +97,22 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
   const [preset, setPreset] = useState<CaptionPreset>('wordPop');
   const [job, setJob] = useState<Job>(null);
   const [quality, setQuality] = useState<CaptionQuality>(savedQuality);
+  const [vocab, setVocab] = useState(savedWords);
+  const vocabField = (
+    <label className="flex flex-col gap-1 text-xs text-zinc-400">
+      Words PawCut should know
+      <input
+        value={vocab}
+        onChange={(e) => {
+          setVocab(e.target.value);
+          saveWords(e.target.value);
+        }}
+        placeholder="Names & English words you use: Jojo, Red Doll, onboard"
+        aria-label="Words PawCut should know"
+        className="min-h-10 rounded-lg bg-zinc-800 px-3 text-sm text-zinc-100"
+      />
+    </label>
+  );
   const pickQuality = (q: CaptionQuality) => {
     setQuality(q);
     saveQuality(q);
@@ -125,7 +143,9 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
     setJob({ stage: 'download', progress: 0 });
     try {
       const lang: CaptionLanguage = 'malay';
-      const words = await transcribe(sources, lang, quality, (stage, progress) => setJob({ stage, progress }));
+      const fixes = savedFixes();
+      const raw = await transcribe(sources, lang, quality, buildPrompt(vocab, fixes), (stage, progress) => setJob({ stage, progress }));
+      const words = applyFixes(raw, fixes);
       if (words.length === 0) {
         setError("Couldn't hear any speech. Type captions instead.");
         return;
@@ -161,7 +181,12 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
           onChange={apply}
           busy={job !== null}
           onRegenerate={() => void generate(captions)}
-          quality={<QualityToggle value={quality} onPick={pickQuality} disabled={job !== null} />}
+          quality={
+            <>
+              {vocabField}
+              <QualityToggle value={quality} onPick={pickQuality} disabled={job !== null} />
+            </>
+          }
         />
       ) : (
         <div className="flex flex-col gap-3 pb-1">
@@ -183,6 +208,7 @@ export function CaptionsSheet({ open, onClose }: { open: boolean; onClose(): voi
           ) : (
             <>
               <QualityToggle value={quality} onPick={pickQuality} disabled={job !== null} />
+              {vocabField}
               <button
                 type="button"
                 onClick={() => void generate()}
@@ -301,7 +327,15 @@ function CaptionEditor({
                 <input
                   defaultValue={text}
                   onBlur={(e) => {
-                    if (e.target.value !== text) onChange(setChunkText(captions, ch, e.target.value));
+                    if (e.target.value === text) return;
+                    // A word-for-word fix ("ombut" → "onboard") is learned for next time and applied everywhere now.
+                    const fixes = learnFixes(
+                      words.map((x) => x.text),
+                      tokenize(e.target.value),
+                    );
+                    rememberFixes(fixes);
+                    const next = setChunkText(captions, ch, e.target.value);
+                    onChange(Object.keys(fixes).length ? { ...next, words: applyFixes(next.words, fixes) } : next);
                   }}
                   aria-label={`Caption ${k + 1}`}
                   className="min-h-9 min-w-0 flex-1 rounded-lg bg-zinc-800 px-2 text-sm"

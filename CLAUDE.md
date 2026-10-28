@@ -111,7 +111,13 @@ Hosting: Cloudflare Pages; headers live in `public/_headers`.
   clips (proxy audio) + voiceover clips. Each FILE is transcribed once over the merged used ranges (+1 s context —
   per-clip snippets of 1–3 s after Auto-Cut produced garbage), only on energy-VAD speech regions (Whisper invents
   "Terima kasih kerana menonton" on silence/noise), output cleaned of known outro hallucinations + loops, then words
-  are placed onto every clip showing them (`speech.ts`, pure, tested). `?whisper=tiny` for
+  are placed onto every clip showing them (`speech.ts`, pure, tested). Mixed Malay/English: with `<|ms|>` forced Whisper
+  spells English words the Malay way ("onboard" → "ombut"). `vocab.ts`: a Whisper prompt (mixed-language style
+  sentence + the user's "Words PawCut should know" + words learned from fixes) is injected as `decoder_input_ids`
+  (`<|startofprev|> … <|startoftranscript|><|ms|><|transcribe|>` — Transformers.js v4 doesn't implement
+  `prompt_ids`; its word-timestamp path drops everything before the first timestamp token, so the prompt never
+  leaks into captions). A word-for-word fix in the caption list is applied to the whole transcript and remembered
+  (localStorage) for future runs. `?whisper=tiny` for
   tests. Captions don't follow later cuts — "Re-listen" regenerates keeping the style.
 - MediaPipe + ONNX Runtime WASM are copied from node_modules to `public/mediapipe/` and `public/ort/` by
   `scripts/copy-runtimes.mjs` (pre-dev / pre-build, gitignored); detector model committed in `public/models/`. All

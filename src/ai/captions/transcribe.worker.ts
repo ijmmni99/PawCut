@@ -158,6 +158,31 @@ async function speechAudio(src: SpeechSource): Promise<Float32Array | null> {
 type AsrChunk = { text: string; timestamp: [number, number | null] };
 
 /**
+ * Whisper "prompt": previous-context text before the task tokens, which steers spelling and vocabulary (names,
+ * English words inside Malay speech). Transformers.js doesn't wire `prompt_ids` up, so the decoder start sequence is
+ * built by hand: <|startofprev|> prompt <|startoftranscript|> <|ms|> <|transcribe|>. The pipeline drops everything
+ * before the first timestamp token, so the prompt never shows up in the output.
+ */
+function decoderPrompt(asr: AutomaticSpeechRecognitionPipeline, language: string, prompt: string): number[] | null {
+  const text = prompt.trim();
+  if (!text) return null;
+  const tok = asr.tokenizer as unknown as { encode(t: string, o: { add_special_tokens: boolean }): number[] };
+  const one = (special: string) => {
+    const ids = tok.encode(special, { add_special_tokens: false });
+    return ids.length === 1 ? ids[0] : undefined;
+  };
+  const code = language === 'malay' ? 'ms' : language === 'english' ? 'en' : language;
+  const sop = one('<|startofprev|>');
+  const sot = one('<|startoftranscript|>');
+  const lang = one(`<|${code}|>`);
+  const task = one('<|transcribe|>');
+  if (sop === undefined || sot === undefined || lang === undefined || task === undefined) return null;
+  // Whisper allows ~224 prompt tokens; keep the end (the user's own words come last).
+  const body = tok.encode(` ${text}`, { add_special_tokens: false }).slice(-200);
+  return [sop, ...body, sot, lang, task];
+}
+
+/**
  * Transcribes each FILE once — the parts the timeline uses plus a little context, merged — rather than every clip on
  * its own: Whisper guesses badly on 1–3 s snippets (Auto-Cut makes many). Only stretches with speech are sent, the
  * output is cleaned of known hallucinations and loops, then words are placed onto every clip that shows them.
@@ -170,6 +195,7 @@ async function transcribe(req: TranscribeRequest): Promise<void> {
     if (src.outSec - src.inSec < 0.3) continue;
     byPath.set(src.path, [...(byPath.get(src.path) ?? []), src]);
   }
+  const prompt = req.prompt ? decoderPrompt(asr, req.language, req.prompt) : null;
   const jobs = [...byPath].flatMap(([path, clips]) => sourceRanges(clips).map((range) => ({ path, clips, range })));
   const words: TimedWord[] = [];
   for (let j = 0; j < jobs.length; j++) {
@@ -188,6 +214,7 @@ async function transcribe(req: TranscribeRequest): Promise<void> {
         stride_length_s: 5,
         task: 'transcribe',
         language: req.language,
+        ...(prompt ? { decoder_input_ids: prompt } : {}),
       })) as { chunks?: AsrChunk[] };
       const len = slice.length / SR;
       for (const c of result.chunks ?? []) {
